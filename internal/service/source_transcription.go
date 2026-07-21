@@ -112,6 +112,9 @@ func sourceTranscriptionError(index, total int, err error) error {
 		return nil
 	}
 	detail := err.Error()
+	if strings.EqualFold(strings.TrimSpace(config.Conf.Transcribe.Provider), "openai") && strings.TrimSpace(config.Conf.Transcribe.Openai.SessionAPIKey) != "" {
+		return fmt.Errorf("speech-to-text đoạn %d/%d không thể chạy trên worker Google Colab. Kiểm tra URL/token STT, giữ notebook đang chạy GPU rồi thử lại: %w", index, total, err)
+	}
 	if strings.Contains(strings.ToLower(detail), "no credentials for provider: openai") {
 		return fmt.Errorf("speech-to-text đoạn %d/%d không thể chạy: API Gateway chưa có credential upstream cho provider OpenAI. Hãy thêm credential STT/OpenAI tại API Gateway, hoặc chọn endpoint OpenAI-compatible hỗ trợ /v1/audio/transcriptions: %w", index, total, err)
 	}
