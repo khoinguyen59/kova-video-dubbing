@@ -7,6 +7,7 @@ import {
   getDesktopProject,
   listDesktopProjects,
 	listSTTOptions,
+	checkSTTHealth,
   listTTSOptions,
   listTranslationModels,
   listVoiceProfiles,
@@ -20,7 +21,7 @@ import {
 import { stageTitle, t } from './i18n'
 import type { DesktopBootstrap, DesktopWorkflowSnapshot, Locale, PersistentStageId, Project, ProjectSnapshot, StageId, StageRun, StageStatus, STTOption, TTSOption, TranslationModelOption, VoiceProfile, WorkflowProgressStep } from './types'
 
-const emptyBootstrap: DesktopBootstrap = { name: 'KOVA', legacy_api_base_url: '', colab_notebook_url: '', locales: ['vi', 'en'], stages: [] }
+const emptyBootstrap: DesktopBootstrap = { name: 'KOVA', legacy_api_base_url: '', colab_notebook_url: '', stt_colab_notebook_url: '', locales: ['vi', 'en'], stages: [] }
 const initialStatuses: Record<StageId, StageStatus> = { source: 'not_started', translation: 'not_started', dubbing_audio: 'not_started', render: 'not_started', outputs: 'not_started' }
 
 function hintKey(stage: StageId): 'sourceHint' | 'translationHint' | 'dubbingHint' | 'renderHint' | 'outputsHint' {
@@ -135,7 +136,10 @@ export default function App() {
   const [ttsOptions, setTTSOptions] = useState<TTSOption[]>([])
   const [ttsOptionID, setTTSOptionID] = useState('omnivoice')
 	const [sttOptions, setSTTOptions] = useState<STTOption[]>([])
-	const [sttOptionID, setSTTOptionID] = useState('fasterwhisper-medium')
+	const [sttOptionID, setSTTOptionID] = useState('colab-fasterwhisper-medium')
+	const [sttWorkerURL, setSTTWorkerURL] = useState('')
+	const [sttWorkerToken, setSTTWorkerToken] = useState('')
+	const [sttConnectionMessage, setSTTConnectionMessage] = useState('')
   const [translationModels, setTranslationModels] = useState<TranslationModelOption[]>([])
   const [translationModelID, setTranslationModelID] = useState('oc/deepseek-v4-flash-free')
   const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([])
@@ -149,9 +153,10 @@ export default function App() {
   const stage = useMemo(() => data.stages.find((item) => item.id === activeStage), [activeStage, data.stages])
   const statuses = useMemo(() => statusesFor(snapshot), [snapshot])
   const activeRun = persistentStage(activeStage) ? latestRun(snapshot, activeStage) : undefined
-  const selectedTTS = ttsOptions.find((option) => option.id === ttsOptionID)
-  const prerequisite = previousStage(activeStage)
-  const canStart = Boolean(snapshot && activeRun?.status !== 'running' && (!prerequisite || statuses[prerequisite] === 'approved') && (activeStage !== 'source' || draft.trim()))
+	const selectedTTS = ttsOptions.find((option) => option.id === ttsOptionID)
+	const selectedSTT = sttOptions.find((option) => option.id === sttOptionID)
+	const prerequisite = previousStage(activeStage)
+	const canStart = Boolean(snapshot && activeRun?.status !== 'running' && (!prerequisite || statuses[prerequisite] === 'approved') && (activeStage !== 'source' || (draft.trim() && (!selectedSTT?.needs_worker || (sttWorkerURL.trim() && sttWorkerToken.trim())))))
 
   useEffect(() => {
     void (async () => {
@@ -160,7 +165,7 @@ export default function App() {
         setData(nextBootstrap)
         setTTSOptions(nextOptions)
 		setSTTOptions(nextSTTOptions)
-		if (nextSTTOptions.some((option) => option.id === 'fasterwhisper-medium')) setSTTOptionID('fasterwhisper-medium')
+		if (nextSTTOptions.some((option) => option.id === 'colab-fasterwhisper-medium')) setSTTOptionID('colab-fasterwhisper-medium')
         setTranslationModels(nextTranslationModels)
         if (nextTranslationModels[0]) setTranslationModelID(nextTranslationModels[0].id)
         setProjects(nextProjects)
@@ -265,6 +270,8 @@ export default function App() {
         stage: activeStage,
         source_url: activeStage === 'source' ? draft.trim() : '',
 		stt_option_id: sttOptionID,
+		stt_worker_url: sttWorkerURL,
+		stt_worker_token: sttWorkerToken,
         translation_model_id: translationModelID,
         tts_option_id: ttsOptionID,
         voice_profile_id: voiceProfileID,
@@ -327,6 +334,13 @@ export default function App() {
     const result = await checkVoiceHealth(workerUrl, workerToken)
     setConnectionMessage(result.reachable ? t(locale, 'connectionSuccess') : `${t(locale, 'connectionFailed')} ${result.message}`)
   }
+
+	async function handleSTTConnectionCheck() {
+		const result = await checkSTTHealth(sttWorkerURL, sttWorkerToken)
+		setSTTConnectionMessage(result.reachable
+			? (locale === 'vi' ? 'Worker STT Colab CUDA đã sẵn sàng.' : 'Colab CUDA STT worker is ready.')
+			: `${locale === 'vi' ? 'Không thể kết nối worker STT Colab.' : 'Cannot connect to the Colab STT worker.'} ${result.message}`)
+	}
 
   async function handleLoadProfiles() {
     await withBusy(async () => {
@@ -461,8 +475,15 @@ export default function App() {
               </div>
             )}
 			{activeStage === 'source' && <div className="worker-form source-stt-form">
-				<label>{locale === 'vi' ? 'Speech-to-text' : 'Speech-to-text'}<select value={sttOptionID} disabled={busy || activeRun?.status === 'running'} onChange={(event) => setSTTOptionID(event.target.value)}>{sttOptions.map((option) => <option key={option.id} value={option.id}>{locale === 'vi' ? option.label_vi : option.label_en}</option>)}</select></label>
-				<p className="worker-help">{locale === 'vi' ? 'STT chạy bằng Faster-Whisper cục bộ. Lần đầu KOVA tải engine và model đã chọn từ nguồn phát hành công khai; không dùng API Gateway hay phụ đề YouTube.' : 'STT uses local Faster-Whisper. On first use, KOVA downloads the engine and selected model from its public release; it does not use an API Gateway or YouTube captions.'}</p>
+				<label>{locale === 'vi' ? 'Speech-to-text' : 'Speech-to-text'}<select value={sttOptionID} disabled={busy || activeRun?.status === 'running'} onChange={(event) => { setSTTOptionID(event.target.value); setSTTConnectionMessage('') }}>{sttOptions.map((option) => <option key={option.id} value={option.id}>{locale === 'vi' ? option.label_vi : option.label_en}</option>)}</select></label>
+				{selectedSTT?.needs_worker ? <>
+					<button className="secondary" disabled={busy || activeRun?.status === 'running'} onClick={() => void openColabNotebook(data.stt_colab_notebook_url)}>{locale === 'vi' ? 'Mở notebook STT trên Google Colab' : 'Open STT notebook in Google Colab'}</button>
+					<label>{locale === 'vi' ? 'URL worker STT Colab' : 'Colab STT worker URL'}<input placeholder="https://xxxx.trycloudflare.com" value={sttWorkerURL} onChange={(event) => setSTTWorkerURL(event.target.value)} /></label>
+					<label>{locale === 'vi' ? 'Token STT Colab' : 'Colab STT token'}<input type="password" autoComplete="off" placeholder={locale === 'vi' ? 'Dán KOVA_STT_TOKEN do notebook in ra' : 'Paste KOVA_STT_TOKEN printed by the notebook'} value={sttWorkerToken} onChange={(event) => setSTTWorkerToken(event.target.value)} /></label>
+					<button className="secondary" disabled={busy || !sttWorkerURL.trim() || !sttWorkerToken.trim()} onClick={() => void handleSTTConnectionCheck()}>{locale === 'vi' ? 'Kiểm tra kết nối STT' : 'Check STT connection'}</button>
+					<p className="worker-help">{locale === 'vi' ? 'Ấn mở notebook, chọn GPU trong Colab rồi Run all. Notebook in URL và token tạm thời; dán vào đây. Sau đó audio được gửi theo từng đoạn sang GPU Colab để tạo SRT, không dùng API Gateway hay phụ đề YouTube.' : 'Open the notebook, choose a GPU runtime in Colab, then Run all. Paste its temporary URL and token here. Audio is sent in timed segments to Colab GPU to create the SRT; no API Gateway or YouTube captions are used.'}</p>
+					{sttConnectionMessage && <p className="connection-message">{sttConnectionMessage}</p>}
+				</> : <p className="worker-help">{locale === 'vi' ? 'STT cục bộ dùng CPU/GPU của máy. Lần đầu KOVA tải engine và model đã chọn từ nguồn phát hành công khai.' : 'Local STT uses this computer’s CPU/GPU. On first use, KOVA downloads the engine and selected model from its public release.'}</p>}
 			</div>}
             {activeStage === 'source' && activeRun?.status === 'running' && <p className="worker-help">{locale === 'vi' ? 'KOVA đang tải video/audio, sau đó chạy speech-to-text để tạo SRT gốc có timestamp. Không cần phụ đề YouTube.' : 'KOVA is downloading the video/audio, then running speech-to-text to create a timestamped source SRT. YouTube captions are not required.'}</p>}
             {persistentStage(activeStage) && snapshot && (activeRun || activeStage === 'source') && <label className="draft-editor">{activeStage === 'source' ? (sourceSRTAvailable ? (locale === 'vi' ? 'SRT gốc từ speech-to-text — kiểm tra và sửa' : 'Source SRT from speech-to-text — review and edit') : (locale === 'vi' ? 'URL nguồn — sửa rồi chạy lại' : 'Source URL — edit and retry')) : activeStage === 'translation' ? (locale === 'vi' ? 'SRT tiếng Việt — kiểm tra và sửa' : 'Vietnamese SRT — review and edit') : t(locale, 'edit')}<textarea value={draft} placeholder={activeStage === 'source' ? (sourceSRTAvailable ? (locale === 'vi' ? 'Kiểm tra và sửa SRT gốc trước khi duyệt.' : 'Review and edit the source SRT before approval.') : (locale === 'vi' ? 'Dán URL video nguồn trước khi chạy.' : 'Paste the source video URL before starting.')) : t(locale, 'draftPlaceholder')} onChange={(event) => setDraft(event.target.value)} disabled={activeRun?.status === 'running' || activeRun?.status === 'approved'} /></label>}

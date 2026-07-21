@@ -139,22 +139,28 @@ func TestTranslationModelDropdownContainsOnlyApprovedFreeGatewayModels(t *testin
 	}
 }
 
-func TestSTTDropdownDefaultsToAndConfiguresLocalFasterWhisper(t *testing.T) {
+func TestSTTDropdownDefaultsToAndConfiguresColabFasterWhisper(t *testing.T) {
 	original := config.Conf.Transcribe
 	t.Cleanup(func() { config.Conf.Transcribe = original })
 
 	options := NewApp().ListSTTOptions()
-	if len(options) < 3 || options[1].ID != "fasterwhisper-medium" || options[1].Provider != "fasterwhisper" {
-		t.Fatalf("ListSTTOptions() = %+v, want local Faster-Whisper medium", options)
+	if len(options) < 4 || options[0].ID != "colab-fasterwhisper-medium" || !options[0].NeedsWorker {
+		t.Fatalf("ListSTTOptions() = %+v, want Colab Faster-Whisper medium", options)
 	}
-	if err := configureDesktopSTT(""); err != nil {
+	if err := configureDesktopSTT("", "https://worker.trycloudflare.com", "session-token"); err != nil {
 		t.Fatalf("configureDesktopSTT(default): %v", err)
 	}
-	if config.Conf.Transcribe.Provider != "fasterwhisper" || config.Conf.Transcribe.Fasterwhisper.Model != "medium" {
+	if config.Conf.Transcribe.Provider != "openai" || config.Conf.Transcribe.Openai.BaseUrl != "https://worker.trycloudflare.com/v1" || config.Conf.Transcribe.Openai.SessionAPIKey != "session-token" {
 		t.Fatalf("default STT config = %+v", config.Conf.Transcribe)
 	}
-	if err := configureDesktopSTT("gateway"); err == nil {
-		t.Fatal("configureDesktopSTT accepted an API Gateway option")
+	if err := configureDesktopSTT("fasterwhisper-medium", "", ""); err != nil {
+		t.Fatalf("configureDesktopSTT(local): %v", err)
+	}
+	if config.Conf.Transcribe.Provider != "fasterwhisper" || config.Conf.Transcribe.Fasterwhisper.Model != "medium" || config.Conf.Transcribe.Openai.SessionAPIKey != "" {
+		t.Fatalf("local STT config = %+v", config.Conf.Transcribe)
+	}
+	if err := configureDesktopSTT("gateway", "", ""); err == nil {
+		t.Fatal("configureDesktopSTT accepted an invalid option")
 	}
 }
 

@@ -144,6 +144,44 @@ func TestValidateRemoteOmniVoiceWorkerAcceptsOnlyHTTPSRemoteURLs(t *testing.T) {
 	}
 }
 
+func TestConfigureRemoteColabTranscriptionKeepsTokenSessionOnly(t *testing.T) {
+	original := Conf
+	t.Cleanup(func() { Conf = original })
+	Conf = validTestConfig()
+
+	if err := ConfigureRemoteColabTranscription("https://worker.trycloudflare.com/", "stt-session-token", "medium"); err != nil {
+		t.Fatalf("ConfigureRemoteColabTranscription() error = %v", err)
+	}
+	if Conf.Transcribe.Provider != "openai" || Conf.Transcribe.Openai.BaseUrl != "https://worker.trycloudflare.com/v1" || Conf.Transcribe.Openai.Model != "medium" {
+		t.Fatalf("remote STT config = %+v", Conf.Transcribe)
+	}
+	if Conf.Transcribe.Openai.SessionAPIKey != "stt-session-token" {
+		t.Fatal("remote STT token was not retained in session memory")
+	}
+	data, err := toml.Marshal(Conf)
+	if err != nil {
+		t.Fatalf("toml.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(data), "stt-session-token") || strings.Contains(string(data), "session_api_key") {
+		t.Fatalf("STT token leaked into TOML: %s", data)
+	}
+}
+
+func TestConfigureRemoteColabTranscriptionRejectsLocalAndBlankToken(t *testing.T) {
+	for _, tc := range []struct {
+		url   string
+		token string
+	}{
+		{url: "https://localhost:3940", token: "token"},
+		{url: "http://worker.example", token: "token"},
+		{url: "https://worker.example", token: ""},
+	} {
+		if err := ConfigureRemoteColabTranscription(tc.url, tc.token, "medium"); err == nil {
+			t.Fatalf("ConfigureRemoteColabTranscription(%q, %q) accepted invalid remote worker", tc.url, tc.token)
+		}
+	}
+}
+
 func TestValidateConfigAcceptsGatewayTTSAlongsideOmniVoice(t *testing.T) {
 	original := Conf
 	t.Cleanup(func() { Conf = original })

@@ -15,6 +15,7 @@ export interface DesktopBootstrap {
   name: string
   legacy_api_base_url: string
   colab_notebook_url: string
+	stt_colab_notebook_url: string
   stages: DesktopStage[]
   locales: Locale[]
 }
@@ -55,6 +56,7 @@ export interface STTOption {
 	label_en: string
 	provider: string
 	model: string
+	needs_worker: boolean
 }
 
 export interface Project {

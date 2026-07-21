@@ -22,6 +22,8 @@ export type WorkflowStageRequest = {
   translation_model_id: string
 	tts_option_id: string
 	stt_option_id: string
+	stt_worker_url: string
+	stt_worker_token: string
 	voice_profile_id: string
   worker_url: string
   worker_token: string
@@ -35,7 +37,8 @@ declare global {
         App?: {
           Bootstrap: () => Promise<DesktopBootstrap>
           OpenColabNotebook: (url: string) => Promise<void>
-          CheckVoiceHealth: (request: VoiceRequest) => Promise<VoiceHealth>
+		  CheckVoiceHealth: (request: VoiceRequest) => Promise<VoiceHealth>
+		  CheckSTTHealth: (request: VoiceRequest) => Promise<VoiceHealth>
           ListVoiceProfiles: (request: VoiceRequest) => Promise<VoiceProfile[]>
           ListTTSOptions: () => Promise<TTSOption[]>
 		  ListSTTOptions: () => Promise<STTOption[]>
@@ -62,6 +65,7 @@ const fallbackBootstrap: DesktopBootstrap = {
   name: 'KOVA',
   legacy_api_base_url: 'http://127.0.0.1:8888',
   colab_notebook_url: 'https://colab.research.google.com/github/khoinguyen59/kova-video-dubbing/blob/main/voice-studio/notebooks/Kova_Voice_Studio_GPU.ipynb',
+	stt_colab_notebook_url: 'https://colab.research.google.com/github/khoinguyen59/kova-video-dubbing/blob/main/notebooks/KOVA_STT_GPU.ipynb',
   locales: ['vi', 'en'],
   stages: [
     { id: 'source', number: '01', title_vi: 'Nguồn video', title_en: 'Video source' },
@@ -89,8 +93,9 @@ function normalizeBootstrap(value: unknown): DesktopBootstrap {
   const stages = asArray<DesktopBootstrap['stages'][number]>(source.stages)
   return {
     name: asText(source.name, fallbackBootstrap.name),
-    legacy_api_base_url: asText(source.legacy_api_base_url, fallbackBootstrap.legacy_api_base_url),
-    colab_notebook_url: asText(source.colab_notebook_url, fallbackBootstrap.colab_notebook_url),
+	legacy_api_base_url: asText(source.legacy_api_base_url, fallbackBootstrap.legacy_api_base_url),
+	colab_notebook_url: asText(source.colab_notebook_url, fallbackBootstrap.colab_notebook_url),
+	stt_colab_notebook_url: asText(source.stt_colab_notebook_url, fallbackBootstrap.stt_colab_notebook_url),
     locales: locales.length ? locales : fallbackBootstrap.locales,
     stages: stages.length ? stages : fallbackBootstrap.stages,
   }
@@ -121,6 +126,12 @@ export async function checkVoiceHealth(baseUrl: string, token: string): Promise<
   if (!window.go?.main?.App?.CheckVoiceHealth) return { reachable: false, status: 0, message: 'Desktop binding is unavailable in browser preview.' }
   const result = await window.go.main.App.CheckVoiceHealth({ base_url: baseUrl, token })
   return result && typeof result === 'object' ? result : { reachable: false, status: 0, message: 'Voice Studio returned no health response.' }
+}
+
+export async function checkSTTHealth(baseUrl: string, token: string): Promise<VoiceHealth> {
+	if (!window.go?.main?.App?.CheckSTTHealth) return { reachable: false, status: 0, message: 'Desktop binding is unavailable in browser preview.' }
+	const result = await window.go.main.App.CheckSTTHealth({ base_url: baseUrl, token })
+	return result && typeof result === 'object' ? result : { reachable: false, status: 0, message: 'Colab STT worker returned no health response.' }
 }
 
 export async function listTTSOptions(): Promise<TTSOption[]> { return asArray<TTSOption>(await desktopApp().ListTTSOptions()) }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"kova/config"
 	"kova/internal/deps"
 	"kova/internal/types"
 	"kova/pkg/util"
@@ -31,9 +32,16 @@ func (s Service) transcribeSourceForReview(ctx context.Context, workflow *subtit
 	if step == nil || strings.TrimSpace(step.AudioFilePath) == "" {
 		return errors.New("không tìm thấy audio nguồn để speech-to-text")
 	}
-	reportSourceProgress(step, "speech_to_text", 0, "Preparing local Faster-Whisper model and timed transcription")
-	if err := deps.CheckLocalTranscriptionDependency(); err != nil {
-		return fmt.Errorf("không thể chuẩn bị speech-to-text cục bộ: %w", err)
+	remoteColabSTT := strings.EqualFold(strings.TrimSpace(config.Conf.Transcribe.Provider), "openai") && strings.TrimSpace(config.Conf.Transcribe.Openai.SessionAPIKey) != ""
+	if remoteColabSTT {
+		reportSourceProgress(step, "speech_to_text", 0, "Connecting to the Google Colab CUDA transcription worker")
+	} else {
+		reportSourceProgress(step, "speech_to_text", 0, "Preparing local Faster-Whisper model and timed transcription")
+	}
+	if !remoteColabSTT {
+		if err := deps.CheckLocalTranscriptionDependency(); err != nil {
+			return fmt.Errorf("không thể chuẩn bị speech-to-text cục bộ: %w", err)
+		}
 	}
 
 	points, err := GetSplitPoints(step.AudioFilePath, sourceTranscriptionChunkSeconds)

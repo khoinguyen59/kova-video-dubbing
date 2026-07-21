@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,7 +27,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultColabNotebookURL = "https://colab.research.google.com/github/khoinguyen59/kova-video-dubbing/blob/main/voice-studio/notebooks/Kova_Voice_Studio_GPU.ipynb"
+const (
+	defaultColabNotebookURL    = "https://colab.research.google.com/github/khoinguyen59/kova-video-dubbing/blob/main/voice-studio/notebooks/Kova_Voice_Studio_GPU.ipynb"
+	defaultSTTColabNotebookURL = "https://colab.research.google.com/github/khoinguyen59/kova-video-dubbing/blob/main/notebooks/KOVA_STT_GPU.ipynb"
+)
 
 var (
 	taskIDPattern              = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -52,11 +56,12 @@ type DesktopStage struct {
 }
 
 type DesktopBootstrap struct {
-	Name             string         `json:"name"`
-	LegacyAPIBaseURL string         `json:"legacy_api_base_url"`
-	ColabNotebookURL string         `json:"colab_notebook_url"`
-	Stages           []DesktopStage `json:"stages"`
-	Locales          []string       `json:"locales"`
+	Name                string         `json:"name"`
+	LegacyAPIBaseURL    string         `json:"legacy_api_base_url"`
+	ColabNotebookURL    string         `json:"colab_notebook_url"`
+	STTColabNotebookURL string         `json:"stt_colab_notebook_url"`
+	Stages              []DesktopStage `json:"stages"`
+	Locales             []string       `json:"locales"`
 }
 
 type StartStageRequest struct {
@@ -117,11 +122,12 @@ type TranslationModelOption struct {
 // transcription uses a local adapter and is never silently redirected to an
 // API Gateway.
 type STTOption struct {
-	ID       string `json:"id"`
-	LabelVI  string `json:"label_vi"`
-	LabelEN  string `json:"label_en"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	ID          string `json:"id"`
+	LabelVI     string `json:"label_vi"`
+	LabelEN     string `json:"label_en"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	NeedsWorker bool   `json:"needs_worker"`
 }
 
 type DesktopProjectRequest struct {
@@ -134,6 +140,8 @@ type DesktopWorkflowStartRequest struct {
 	Stage              string `json:"stage"`
 	SourceURL          string `json:"source_url"`
 	STTOptionID        string `json:"stt_option_id"`
+	STTWorkerURL       string `json:"stt_worker_url"`
+	STTWorkerToken     string `json:"stt_worker_token"`
 	TranslationModelID string `json:"translation_model_id"`
 	TTSOptionID        string `json:"tts_option_id"`
 	VoiceProfileID     string `json:"voice_profile_id"`
@@ -210,10 +218,11 @@ func (a *App) Shutdown(_ context.Context) {
 // audio and Colab bearer tokens must never be sent to the renderer.
 func (a *App) Bootstrap() DesktopBootstrap {
 	return DesktopBootstrap{
-		Name:             "KOVA",
-		LegacyAPIBaseURL: localAPIBaseURL(),
-		ColabNotebookURL: defaultColabNotebookURL,
-		Locales:          []string{"vi", "en"},
+		Name:                "KOVA",
+		LegacyAPIBaseURL:    localAPIBaseURL(),
+		ColabNotebookURL:    defaultColabNotebookURL,
+		STTColabNotebookURL: defaultSTTColabNotebookURL,
+		Locales:             []string{"vi", "en"},
 		Stages: []DesktopStage{
 			{ID: "source", Number: "01", TitleVI: "Nguồn video", TitleEN: "Video source"},
 			{ID: "translation", Number: "02", TitleVI: "Dịch và phụ đề", TitleEN: "Translation and subtitles"},
@@ -395,7 +404,7 @@ func (a *App) StartDesktopWorkflowStage(request DesktopWorkflowStartRequest) (De
 		}
 	}
 	if request.Stage == string(project.StageSource) {
-		if err := configureDesktopSTT(request.STTOptionID); err != nil {
+		if err := configureDesktopSTT(request.STTOptionID, request.STTWorkerURL, request.STTWorkerToken); err != nil {
 			_, _ = store.FailStage(context.Background(), run.ID, workflowFailureDetail(err))
 			return action, err
 		}
@@ -867,6 +876,44 @@ func (a *App) CheckVoiceHealth(request VoiceHealthRequest) VoiceHealth {
 	return VoiceHealth{Reachable: true, Status: response.StatusCode, Data: body, Message: "Kết nối thành công / Connected"}
 }
 
+// CheckSTTHealth verifies the independent, CUDA-only Colab transcription
+// worker before a source job starts. The worker's OpenAI-compatible endpoint
+// is configured under /v1, but health deliberately stays at the tunnel root.
+func (a *App) CheckSTTHealth(request VoiceHealthRequest) VoiceHealth {
+	baseURL, err := normalizeColabSTTURL(request.BaseURL)
+	if err != nil {
+		return VoiceHealth{Message: err.Error()}
+	}
+	if strings.TrimSpace(request.Token) == "" {
+		return VoiceHealth{Message: "Chưa dán token STT Google Colab / Missing Google Colab STT token"}
+	}
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/health", nil)
+	if err != nil {
+		return VoiceHealth{Message: err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(request.Token))
+	response, err := a.httpClient.Do(req)
+	if err != nil {
+		return VoiceHealth{Message: "Không kết nối được worker STT Colab / Cannot reach Colab STT worker: " + err.Error()}
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return VoiceHealth{Status: response.StatusCode, Message: "Colab STT worker returned " + response.Status}
+	}
+	var health struct {
+		Ready  bool   `json:"ready"`
+		Device string `json:"device"`
+	}
+	if err := json.Unmarshal(body, &health); err != nil {
+		return VoiceHealth{Status: response.StatusCode, Message: "Phản hồi health STT không hợp lệ / Invalid STT health response"}
+	}
+	if !health.Ready || !strings.EqualFold(strings.TrimSpace(health.Device), "cuda") {
+		return VoiceHealth{Status: response.StatusCode, Data: body, Message: "Worker STT chưa sẵn sàng CUDA / Colab STT worker is not CUDA-ready"}
+	}
+	return VoiceHealth{Reachable: true, Status: response.StatusCode, Data: body, Message: "Worker STT Colab CUDA đã sẵn sàng / Colab CUDA STT worker is ready"}
+}
+
 // ListVoiceProfiles populates a dropdown only after the user has supplied a
 // worker URL and token. It never returns worker paths or reference audio.
 func (a *App) ListVoiceProfiles(request VoiceHealthRequest) ([]VoiceProfile, error) {
@@ -916,6 +963,7 @@ func (a *App) ListTranslationModels() []TranslationModelOption {
 }
 
 var desktopSTTOptions = []STTOption{
+	{ID: "colab-fasterwhisper-medium", LabelVI: "Google Colab GPU · Faster-Whisper Medium (khuyến nghị)", LabelEN: "Google Colab GPU · Faster-Whisper Medium (recommended)", Provider: "colab", Model: "medium", NeedsWorker: true},
 	{ID: "fasterwhisper-tiny", LabelVI: "Faster-Whisper · Tiny (cục bộ, nhanh)", LabelEN: "Faster-Whisper · Tiny (local, fast)", Provider: "fasterwhisper", Model: "tiny"},
 	{ID: "fasterwhisper-medium", LabelVI: "Faster-Whisper · Medium (cục bộ, khuyến nghị)", LabelEN: "Faster-Whisper · Medium (local, recommended)", Provider: "fasterwhisper", Model: "medium"},
 	{ID: "fasterwhisper-large-v2", LabelVI: "Faster-Whisper · Large V2 (cục bộ, chính xác hơn)", LabelEN: "Faster-Whisper · Large V2 (local, more accurate)", Provider: "fasterwhisper", Model: "large-v2"},
@@ -925,10 +973,10 @@ func (a *App) ListSTTOptions() []STTOption {
 	return append([]STTOption(nil), desktopSTTOptions...)
 }
 
-func configureDesktopSTT(optionID string) error {
+func configureDesktopSTT(optionID, workerURL, workerToken string) error {
 	optionID = strings.TrimSpace(optionID)
 	if optionID == "" {
-		optionID = "fasterwhisper-medium"
+		optionID = "colab-fasterwhisper-medium"
 	}
 	for _, option := range desktopSTTOptions {
 		if option.ID != optionID {
@@ -936,8 +984,13 @@ func configureDesktopSTT(optionID string) error {
 		}
 		config.Conf.Transcribe.Provider = option.Provider
 		switch option.Provider {
+		case "colab":
+			return config.ConfigureRemoteColabTranscription(workerURL, workerToken, option.Model)
 		case "fasterwhisper":
 			config.Conf.Transcribe.Fasterwhisper.Model = option.Model
+			// Explicitly discard an earlier remote session token when the user
+			// switches back to local STT.
+			config.Conf.Transcribe.Openai.SessionAPIKey = ""
 		default:
 			return fmt.Errorf("STT provider không được KOVA desktop hỗ trợ: %s", option.Provider)
 		}
@@ -954,6 +1007,21 @@ func normalizeVoiceURL(raw string) (string, error) {
 	localHost := strings.EqualFold(u.Hostname(), "localhost") || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
 	if u.Scheme != "https" && !(u.Scheme == "http" && localHost) {
 		return "", errors.New("Voice Studio phải dùng HTTPS, trừ localhost / Voice Studio must use HTTPS except localhost")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
+func normalizeColabSTTURL(raw string) (string, error) {
+	u, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", errors.New("URL worker STT phải là HTTPS công khai / STT worker URL must be public HTTPS")
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return "", errors.New("không cho phép worker STT cục bộ; hãy dùng URL tunnel từ Google Colab")
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
+		return "", errors.New("không cho phép worker STT cục bộ; hãy dùng URL tunnel từ Google Colab")
 	}
 	return strings.TrimRight(u.String(), "/"), nil
 }

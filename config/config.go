@@ -314,6 +314,45 @@ func ValidateRemoteOmniVoiceWorker() error {
 	return nil
 }
 
+// ConfigureRemoteColabTranscription selects a user-started Faster-Whisper
+// worker running on Google Colab. The URL and bearer token are held only for
+// the current desktop session; neither value is written to config.toml.
+// The worker exposes /v1/audio/transcriptions while callers paste its tunnel
+// root, exactly as printed by the KOVA notebook.
+func ConfigureRemoteColabTranscription(rawURL, token, model string) error {
+	endpoint, err := normalizeRemoteColabWorkerURL(rawURL)
+	if err != nil {
+		return fmt.Errorf("URL worker STT Google Colab không hợp lệ: %w", err)
+	}
+	if strings.TrimSpace(token) == "" {
+		return errors.New("chưa dán token STT do notebook Google Colab in ra")
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = "medium"
+	}
+	Conf.Transcribe.Provider = "openai"
+	Conf.Transcribe.Openai.BaseUrl = endpoint + "/v1"
+	Conf.Transcribe.Openai.SessionAPIKey = strings.TrimSpace(token)
+	Conf.Transcribe.Openai.Model = model
+	return nil
+}
+
+func normalizeRemoteColabWorkerURL(rawURL string) (string, error) {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return "", errors.New("worker phải là URL HTTPS công khai")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return "", errors.New("không cho phép worker STT cục bộ; hãy dùng URL tunnel từ Google Colab")
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
+		return "", errors.New("không cho phép worker STT cục bộ; hãy dùng URL tunnel từ Google Colab")
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
 func validateConfig() error {
 	llmProvider := strings.ToLower(strings.TrimSpace(Conf.Llm.Provider))
 	if llmProvider == "" {
