@@ -18,7 +18,10 @@ if ($currentVersion -notmatch '^(\d+)\.(\d+)\.(\d+)\.(\d+)$') {
     throw "VERSION must use four numeric parts, for example 1.0.0.1. Found: $currentVersion"
 }
 
-$nextVersion = "{0}.{1}.{2}.{3}" -f $Matches[1], $Matches[2], $Matches[3], ([int]$Matches[4] + 1)
+# Desktop releases advance the third segment and reset the final segment to 1.
+# Example: 1.0.0.13 -> 1.0.1.1 -> 1.0.2.1. This avoids an unbounded build
+# counter being mistaken for the product release number.
+$nextVersion = "{0}.{1}.{2}.{3}" -f $Matches[1], $Matches[2], ([int]$Matches[3] + 1), 1
 $outputName = "KOVA-Desktop-$nextVersion.exe"
 $outputPath = Join-Path $buildRoot $outputName
 
