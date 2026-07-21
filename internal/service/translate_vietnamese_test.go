@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"kova/internal/types"
+	"kova/pkg/util"
 )
 
 func TestNeedsVietnameseReview(t *testing.T) {
@@ -41,16 +42,32 @@ func TestNeedsVietnameseReview(t *testing.T) {
 	}
 }
 
-func TestEnforceTargetLanguageRepairsResidualEnglish(t *testing.T) {
-	chat := staticChatCompleter{response: `{"text":"Uống một đồ uống","proper_noun_only":false}`}
-	translator := &Translator{chatCompleter: chat}
+func TestEnforceTargetLanguageLeavesSuspicionForUserReview(t *testing.T) {
+	translator := &Translator{}
 
 	got, err := translator.enforceTargetLanguage("Drink a beverage", "Uống beverage", types.LanguageNameEnglish, types.LanguageNameVietnamese)
 	if err != nil {
 		t.Fatalf("enforceTargetLanguage() error = %v", err)
 	}
-	if got != "Uống một đồ uống" {
+	if got != "Uống beverage" {
 		t.Fatalf("enforceTargetLanguage() = %q", got)
+	}
+}
+
+func TestTranslationReviewWarningsAreAdvisoryAndCueSpecific(t *testing.T) {
+	blocks := []*util.SrtBlock{
+		{Index: 80, OriginLanguageSentence: "A hooded raincoat or poncho keeps you warm and dry.", TargetLanguageSentence: "Một chiếc áo khoác mưa có mũ hoặc áo poncho sẽ giữ cho cơ thể bạn ấm áp và khô ráo."},
+		{Index: 81, OriginLanguageSentence: "Drink a beverage.", TargetLanguageSentence: "Uống một đồ uống."},
+	}
+	warnings := translationReviewWarnings(blocks, "en", "vi")
+	if len(warnings) != 1 {
+		t.Fatalf("translationReviewWarnings() = %#v, want one warning", warnings)
+	}
+	if warnings[0].CueIndex != 80 || len(warnings[0].SuspiciousWords) != 1 || warnings[0].SuspiciousWords[0] != "poncho" {
+		t.Fatalf("warning = %#v, want cue 80 / poncho", warnings[0])
+	}
+	if message := translationReviewMessage(warnings); message == "" || !containsVietnameseMarker(message) {
+		t.Fatalf("translationReviewMessage() = %q, want non-empty Vietnamese review guidance", message)
 	}
 }
 

@@ -100,6 +100,7 @@ type subtitleWorkflow struct {
 	SourceRevision      int                        `json:"source_revision"`
 	TranslationRevision int                        `json:"translation_revision"`
 	SourceSteps         []dto.WorkflowProgressStep `json:"source_steps,omitempty"`
+	TranslationWarnings []dto.TranslationWarning   `json:"translation_warnings,omitempty"`
 	UpdatedAt           string                     `json:"updated_at"`
 }
 
@@ -114,6 +115,15 @@ func initialSourceSteps() []dto.WorkflowProgressStep {
 
 func cloneSourceSteps(steps []dto.WorkflowProgressStep) []dto.WorkflowProgressStep {
 	return append([]dto.WorkflowProgressStep(nil), steps...)
+}
+
+func cloneTranslationWarnings(warnings []dto.TranslationWarning) []dto.TranslationWarning {
+	result := make([]dto.TranslationWarning, 0, len(warnings))
+	for _, warning := range warnings {
+		warning.SuspiciousWords = append([]string(nil), warning.SuspiciousWords...)
+		result = append(result, warning)
+	}
+	return result
 }
 
 func (w *subtitleWorkflow) updateSourceStep(id string, percent uint8, detail string) {
@@ -612,6 +622,7 @@ func (s Service) StartWorkflowTranslation(taskID string) (*dto.SubtitleWorkflowD
 		workflow.Message = "Đang dịch bản SRT gốc đã được duyệt."
 		workflow.FailureReason = ""
 		workflow.FailedStage = ""
+		workflow.TranslationWarnings = nil
 	}
 	workflow.mu.Unlock()
 	if !allowed {
@@ -673,7 +684,8 @@ func (s Service) runWorkflowTranslation(workflow *subtitleWorkflow) {
 	task.ProcessPct = 70
 	workflow.mu.Lock()
 	workflow.CurrentStage = workflowAwaitTranslation
-	workflow.Message = "Đã tạo bản dịch. Hãy xem/sửa SRT tiếng Việt rồi bấm Duyệt bản dịch."
+	workflow.TranslationWarnings = translationReviewWarnings(blocks, workflow.OriginLanguage, workflow.TargetLanguage)
+	workflow.Message = translationReviewMessage(workflow.TranslationWarnings)
 	workflow.FailureReason = ""
 	workflow.TranslationRevision++
 	workflow.mu.Unlock()
@@ -1100,6 +1112,7 @@ func (s Service) UpdateWorkflowSubtitle(taskID, kind, content string) (*dto.Subt
 		path = filepath.Join(workflow.TaskBasePath, types.SubtitleTaskOriginLanguageSrtFileName)
 		workflow.SourceApproved = false
 		workflow.TranslationApproved = false
+		workflow.TranslationWarnings = nil
 		workflow.DubbingRequested = false
 		workflow.DubbingAudioApproved = false
 		workflow.DubbingVideoApproved = false
@@ -1138,6 +1151,18 @@ func (s Service) UpdateWorkflowSubtitle(taskID, kind, content string) (*dto.Subt
 		invalidateWorkflowOutputs(workflow.TaskBasePath, false)
 		if err := s.synchronizeWorkflowTranslationArtifacts(workflow); err != nil {
 			return nil, err
+		}
+		warnings, warningErr := translationReviewWarningsFromWorkflow(workflow)
+		if warningErr != nil {
+			// The edited SRT has already passed syntax and timing validation.
+			// Warning extraction is advisory, so it must never prevent a user from
+			// saving the review draft.
+			log.GetLogger().Warn("could not refresh translation review warnings", zap.Error(warningErr))
+		} else {
+			workflow.mu.Lock()
+			workflow.TranslationWarnings = warnings
+			workflow.Message = translationReviewMessage(warnings)
+			workflow.mu.Unlock()
 		}
 	}
 	task := workflow.task()
@@ -1281,6 +1306,27 @@ func (s Service) synchronizeWorkflowTranslationArtifacts(workflow *subtitleWorkf
 	return writeWorkflowText(filepath.Join(workflow.TaskBasePath, "output", types.SubtitleTaskTargetLanguageTextFileName), source, true)
 }
 
+func translationReviewWarningsFromWorkflow(workflow *subtitleWorkflow) ([]dto.TranslationWarning, error) {
+	if workflow == nil {
+		return nil, errors.New("workflow is nil")
+	}
+	source, err := workflowSRTBlocks(filepath.Join(workflow.TaskBasePath, types.SubtitleTaskOriginLanguageSrtFileName))
+	if err != nil {
+		return nil, err
+	}
+	target, err := workflowSRTBlocks(filepath.Join(workflow.TaskBasePath, types.SubtitleTaskTargetLanguageSrtFileName))
+	if err != nil {
+		return nil, err
+	}
+	if err := validateWorkflowCueAlignment(source, target); err != nil {
+		return nil, err
+	}
+	for index := range source {
+		source[index].TargetLanguageSentence = target[index].OriginLanguageSentence
+	}
+	return translationReviewWarnings(source, workflow.OriginLanguage, workflow.TargetLanguage), nil
+}
+
 func (s Service) failWorkflow(workflow *subtitleWorkflow, task *types.SubtitleTask, err error) {
 	if task != nil {
 		task.Status = types.SubtitleTaskStatusFailed
@@ -1312,6 +1358,7 @@ func workflowSnapshot(workflow *subtitleWorkflow) *dto.SubtitleWorkflowData {
 	dubbingVideoApproved := workflow.DubbingVideoApproved
 	failedStage := workflow.FailedStage
 	sourceSteps := sourceStepsForSnapshot(workflow.SourceSteps, stage, basePath, failure)
+	translationWarnings := cloneTranslationWarnings(workflow.TranslationWarnings)
 	workflow.mu.Unlock()
 	task := workflow.task()
 	processPercent := task.ProcessPct
@@ -1319,16 +1366,17 @@ func workflowSnapshot(workflow *subtitleWorkflow) *dto.SubtitleWorkflowData {
 		processPercent = workflowStageProgress(stage)
 	}
 	data := &dto.SubtitleWorkflowData{
-		TaskId:         taskID,
-		SourceUrl:      sourceURL,
-		CurrentStage:   stage,
-		ProcessPercent: processPercent,
-		Message:        message,
-		FailureReason:  failure,
-		SourceSteps:    sourceSteps,
-		Artifacts:      workflowArtifacts(taskID, basePath),
-		CanStart:       map[string]bool{},
-		ReviewRequired: strings.HasPrefix(stage, "awaiting_"),
+		TaskId:              taskID,
+		SourceUrl:           sourceURL,
+		CurrentStage:        stage,
+		ProcessPercent:      processPercent,
+		Message:             message,
+		FailureReason:       failure,
+		SourceSteps:         sourceSteps,
+		TranslationWarnings: translationWarnings,
+		Artifacts:           workflowArtifacts(taskID, basePath),
+		CanStart:            map[string]bool{},
+		ReviewRequired:      strings.HasPrefix(stage, "awaiting_"),
 	}
 	data.SourceSrtUrl = existingWorkflowDownload(filepath.Join(basePath, types.SubtitleTaskOriginLanguageSrtFileName))
 	data.TranslatedSrtUrl = existingWorkflowDownload(filepath.Join(basePath, types.SubtitleTaskTargetLanguageSrtFileName))

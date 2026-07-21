@@ -366,6 +366,7 @@ export default function App() {
   const workflowPercent = safePercent(workflowStatus?.process_percent)
   const sourceSteps = activeStage === 'source' && Array.isArray(workflowStatus?.source_steps) ? workflowStatus.source_steps : []
   const sourceSRTAvailable = Boolean(workflowStatus?.source_srt_url)
+	const translationWarnings = activeStage === 'translation' && Array.isArray(workflowStatus?.translation_warnings) ? workflowStatus.translation_warnings : []
   const workflowArtifacts = Array.isArray(workflowStatus?.artifacts) ? workflowStatus.artifacts : []
   const previewArtifact = workflowArtifacts.find((artifact) => artifact.kind === 'subtitled_horizontal_video') ?? workflowArtifacts.find((artifact) => artifact.kind === 'dubbed_video') ?? workflowArtifacts.find((artifact) => artifact.kind === 'source_video')
   const previewURL = previewArtifact ? workflowArtifactURL(data.legacy_api_base_url, previewArtifact.download_url) : ''
@@ -465,7 +466,12 @@ export default function App() {
                 <p className="worker-help">{locale === 'vi' ? 'KOVA chỉ gửi các model free đã kiểm chứng qua API Gateway trong danh sách này.' : 'KOVA sends only the verified free gateway models listed here.'}</p>
               </div>
             )}
-            {activeStage === 'dubbing_audio' && (
+			{activeStage === 'translation' && translationWarnings.length > 0 && <section className="translation-warning-panel" aria-live="polite">
+				<h2>{locale === 'vi' ? 'Cảnh báo từ nghi là tiếng Anh — không chặn duyệt' : 'Possible English words — approval is not blocked'}</h2>
+				<p>{locale === 'vi' ? 'Bản dịch đã được tạo. Kiểm tra các cue bên dưới, sửa SRT nếu cần; nếu các từ là tên riêng/thuật ngữ hợp lệ, bạn có thể bấm Duyệt đầu ra để tiếp tục.' : 'The translation is ready. Review the cues below and edit the SRT if needed. If they are valid names or terms, you may approve the output and continue.'}</p>
+				<ul>{translationWarnings.map((warning) => <li key={`${warning.cue_index}-${warning.suspicious_words.join('-')}`}><strong>{locale === 'vi' ? `Cue ${warning.cue_index}` : `Cue ${warning.cue_index}`}</strong><span>{warning.suspicious_words.join(', ')}</span><small>{warning.text}</small></li>)}</ul>
+			</section>}
+			{activeStage === 'dubbing_audio' && (
               <div className="worker-form">
                 <label>{t(locale, 'ttsProvider')}<select value={ttsOptionID} onChange={(event) => setTTSOptionID(event.target.value)}>{ttsOptions.map((option) => <option key={option.id} value={option.id}>{locale === 'vi' ? option.label_vi : option.label_en}</option>)}</select></label>
                 {selectedTTS?.needs_profile && <label>{t(locale, 'fixedVoice')}<select value={voiceProfileID} onChange={(event) => setVoiceProfileID(event.target.value)}><option value="">{t(locale, 'noProfile')}</option>{voiceProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.language}</option>)}</select></label>}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"kova/config"
+	"kova/internal/dto"
 	"kova/internal/types"
 	"kova/log"
 	"kova/pkg/util"
@@ -243,7 +244,9 @@ func (t *Translator) recursiveSplitSentence(sentence string, depth int) []string
 	return result
 }
 
-// translateWithRetry 带重试和翻译质量检查的翻译方法
+// translateWithRetry retries transport/model failures and empty replies only.
+// Target-language detection is intentionally advisory: the completed SRT is
+// reviewed by the user with any suspicious tokens shown in the desktop.
 func (t *Translator) translateWithRetry(prompt, originText string, originLang, targetLang types.StandardLanguageCode) (string, error) {
 	const maxRetries = 3
 	var lastErr error
@@ -263,8 +266,7 @@ func (t *Translator) translateWithRetry(prompt, originText string, originLang, t
 		translatedText = strings.TrimSpace(translatedText)
 		translatedText = strings.Trim(translatedText, `"'`)
 
-		// 检查翻译质量
-		if t.isTranslationValid(originText, translatedText, originLang, targetLang) {
+		if translatedText != "" {
 			log.GetLogger().Debug("translation successful",
 				zap.Int("attempt", attempt+1),
 				zap.String("originText", originText),
@@ -272,7 +274,8 @@ func (t *Translator) translateWithRetry(prompt, originText string, originLang, t
 			return translatedText, nil
 		}
 
-		log.GetLogger().Warn("translation quality check failed, retrying",
+		lastErr = errors.New("translation response is empty")
+		log.GetLogger().Warn("translation returned empty text, retrying",
 			zap.Int("attempt", attempt+1),
 			zap.String("originText", originText),
 			zap.String("translatedText", translatedText))
@@ -287,7 +290,7 @@ func (t *Translator) translateWithRetry(prompt, originText string, originLang, t
 		return "", lastErr
 	}
 
-	return "", fmt.Errorf("translation quality check failed after %d attempts", maxRetries)
+	return "", fmt.Errorf("translation returned no usable text after %d attempts", maxRetries)
 }
 
 // isTranslationValid 检查翻译是否有效
@@ -433,52 +436,15 @@ IMPORTANT: The previous translation was inadequate. Please ensure:
 	return originalPrompt + enhancement
 }
 
-// enforceTargetLanguage prevents a failed or incomplete batch translation from
-// silently shipping ordinary English words in a Vietnamese dubbed video.
+// enforceTargetLanguage is retained as the common final normalizer for legacy
+// callers. It no longer blocks a completed translation because suspected
+// English is a review warning, not a runtime failure.
 func (t *Translator) enforceTargetLanguage(origin, translated string, originLang, targetLang types.StandardLanguageCode) (string, error) {
 	translated = strings.TrimSpace(translated)
 	if translated == "" {
 		return "", errors.New("translation is empty")
 	}
-	if targetLang != types.LanguageNameVietnamese || !needsVietnameseReview(origin, translated) {
-		return translated, nil
-	}
-	if t == nil || t.chatCompleter == nil {
-		return "", errors.New("Vietnamese translation requires a configured language model")
-	}
-
-	prompt := fmt.Sprintf(`You are the final Vietnamese subtitle quality gate.
-Source language: %s
-Source text: %q
-Candidate Vietnamese subtitle: %q
-
-Return ONLY JSON: {"text":"...","proper_noun_only":false}
-Rules:
-1. Output fully natural Vietnamese.
-2. Translate every ordinary English word, including headings and vocabulary examples.
-3. Keep English only for an actual proper name, brand, acronym, code, URL, or number.
-4. Set proper_noun_only=true only if the complete output is exclusively a proper name, brand, acronym, code, URL, or number.
-5. No explanations, notes, markdown, or bilingual text.`, types.GetStandardLanguageName(originLang), origin, translated)
-
-	response, err := t.chatCompleter.ChatCompletion(prompt)
-	if err != nil {
-		return "", err
-	}
-	var repaired struct {
-		Text           string `json:"text"`
-		ProperNounOnly bool   `json:"proper_noun_only"`
-	}
-	if err := json.Unmarshal([]byte(util.CleanMarkdownCodeBlock(response)), &repaired); err != nil {
-		return "", fmt.Errorf("parse Vietnamese quality-gate response: %w", err)
-	}
-	repaired.Text = strings.Join(strings.Fields(repaired.Text), " ")
-	if repaired.Text == "" {
-		return "", errors.New("Vietnamese quality gate returned empty text")
-	}
-	if !repaired.ProperNounOnly && needsVietnameseReview(origin, repaired.Text) {
-		return "", fmt.Errorf("Vietnamese quality gate left untranslated English text: %q", repaired.Text)
-	}
-	return repaired.Text, nil
+	return translated, nil
 }
 
 func needsVietnameseReview(origin, translated string) bool {
@@ -520,10 +486,55 @@ func needsVietnameseReview(origin, translated string) bool {
 }
 
 func containsResidualEnglishWord(origin, translated string) bool {
+	return len(suspiciousVietnameseWords(origin, translated)) > 0
+}
+
+// translationReviewWarnings is deliberately advisory. The translated SRT is
+// always saved when it is structurally valid; the user sees these cue-level
+// candidates, can edit the SRT, or can explicitly approve it unchanged.
+func translationReviewWarnings(blocks []*util.SrtBlock, originLang, targetLang string) []dto.TranslationWarning {
+	if types.StandardLanguageCode(strings.TrimSpace(targetLang)) != types.LanguageNameVietnamese {
+		return nil
+	}
+	warnings := make([]dto.TranslationWarning, 0)
+	for _, block := range blocks {
+		if block == nil {
+			continue
+		}
+		words := suspiciousVietnameseWords(block.OriginLanguageSentence, block.TargetLanguageSentence)
+		if len(words) == 0 {
+			continue
+		}
+		warnings = append(warnings, dto.TranslationWarning{
+			CueIndex:        block.Index,
+			SuspiciousWords: words,
+			Text:            strings.TrimSpace(block.TargetLanguageSentence),
+		})
+	}
+	return warnings
+}
+
+func translationReviewMessage(warnings []dto.TranslationWarning) string {
+	if len(warnings) == 0 {
+		return "Đã tạo bản dịch. Hãy xem/sửa SRT tiếng Việt rồi bấm Duyệt bản dịch."
+	}
+	return fmt.Sprintf("Đã tạo bản dịch. Phát hiện %d cue có từ nghi là tiếng Anh; hãy kiểm tra/sửa hoặc bấm Duyệt để tiếp tục.", len(warnings))
+}
+
+func suspiciousVietnameseWords(origin, translated string) []string {
 	sourceIsVietnamese := containsVietnameseMarker(origin)
 	sourceTokens := make(map[string]struct{}, len(latinWords(origin)))
 	for _, token := range latinWords(origin) {
 		sourceTokens[strings.ToLower(token)] = struct{}{}
+	}
+	result := make([]string, 0)
+	appendUnique := func(token string) {
+		for _, existing := range result {
+			if strings.EqualFold(existing, token) {
+				return
+			}
+		}
+		result = append(result, token)
 	}
 
 	for _, token := range latinWords(translated) {
@@ -537,10 +548,11 @@ func containsResidualEnglishWord(origin, translated string) bool {
 				continue
 			}
 			if _, carriedOver := sourceTokens[lower]; carriedOver {
-				return true
+				appendUnique(token)
+				continue
 			}
 			if _, isEnglish := ordinaryEnglishWords[lower]; isEnglish {
-				return true
+				appendUnique(token)
 			}
 			continue
 		}
@@ -548,7 +560,8 @@ func containsResidualEnglishWord(origin, translated string) bool {
 			continue
 		}
 		if _, isEnglish := ordinaryEnglishWords[lower]; isEnglish {
-			return true
+			appendUnique(token)
+			continue
 		}
 		// When an English source contains an unrecognised lowercase word which
 		// survived into a Vietnamese candidate, it is more likely untranslated
@@ -556,11 +569,11 @@ func containsResidualEnglishWord(origin, translated string) bool {
 		// be supplied via the protected-terms setting.
 		if !sourceIsVietnamese && isLowerCaseLatinToken(token) {
 			if _, carriedOver := sourceTokens[lower]; carriedOver {
-				return true
+				appendUnique(token)
 			}
 		}
 	}
-	return false
+	return result
 }
 
 func hasVietnameseASCIISyllableContext(text, token string) bool {

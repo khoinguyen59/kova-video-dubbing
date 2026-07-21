@@ -109,25 +109,35 @@ type WorkflowProgressStep struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// TranslationWarning is advisory only. KOVA saves the generated SRT and
+// requires the user to review it; a suspected English token must never turn a
+// completed translation into a failed job.
+type TranslationWarning struct {
+	CueIndex        int      `json:"cue_index"`
+	SuspiciousWords []string `json:"suspicious_words"`
+	Text            string   `json:"text"`
+}
+
 // SubtitleWorkflowData is returned by the staged endpoints. The desktop must
 // use CanStart rather than inferring a next operation from progress percent:
 // every stage is explicitly user-controlled and may require review first.
 type SubtitleWorkflowData struct {
-	TaskId            string                 `json:"task_id"`
-	SourceUrl         string                 `json:"source_url,omitempty"`
-	CurrentStage      string                 `json:"current_stage"`
-	ProcessPercent    uint8                  `json:"process_percent"`
-	Message           string                 `json:"message"`
-	FailureReason     string                 `json:"failure_reason,omitempty"`
-	SourceSrtUrl      string                 `json:"source_srt_url,omitempty"`
-	TranslatedSrtUrl  string                 `json:"translated_srt_url,omitempty"`
-	BilingualSrtUrl   string                 `json:"bilingual_srt_url,omitempty"`
-	SourceTextUrl     string                 `json:"source_text_url,omitempty"`
-	TranslatedTextUrl string                 `json:"translated_text_url,omitempty"`
-	SourceSteps       []WorkflowProgressStep `json:"source_steps,omitempty"`
-	Artifacts         []WorkflowArtifact     `json:"artifacts"`
-	CanStart          map[string]bool        `json:"can_start"`
-	ReviewRequired    bool                   `json:"review_required"`
+	TaskId              string                 `json:"task_id"`
+	SourceUrl           string                 `json:"source_url,omitempty"`
+	CurrentStage        string                 `json:"current_stage"`
+	ProcessPercent      uint8                  `json:"process_percent"`
+	Message             string                 `json:"message"`
+	FailureReason       string                 `json:"failure_reason,omitempty"`
+	SourceSrtUrl        string                 `json:"source_srt_url,omitempty"`
+	TranslatedSrtUrl    string                 `json:"translated_srt_url,omitempty"`
+	BilingualSrtUrl     string                 `json:"bilingual_srt_url,omitempty"`
+	SourceTextUrl       string                 `json:"source_text_url,omitempty"`
+	TranslatedTextUrl   string                 `json:"translated_text_url,omitempty"`
+	SourceSteps         []WorkflowProgressStep `json:"source_steps,omitempty"`
+	TranslationWarnings []TranslationWarning   `json:"translation_warnings,omitempty"`
+	Artifacts           []WorkflowArtifact     `json:"artifacts"`
+	CanStart            map[string]bool        `json:"can_start"`
+	ReviewRequired      bool                   `json:"review_required"`
 }
 
 type SubtitleWorkflowRes struct {

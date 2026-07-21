@@ -34,3 +34,11 @@ button:disabled { cursor: not-allowed; opacity: .46; }
 .source-step.failed .source-step-track i { background: #e06c78; }
 .source-step small { display: block; margin-top: 7px; color: #afc1dc; font-size: 11px; overflow-wrap: anywhere; }
 .source-stt-form { grid-template-columns: minmax(0, 1fr); }
+
+.translation-warning-panel { margin-top: 16px; padding: 14px; border: 1px solid #92733a; border-radius: 10px; background: #2e2a1c; }
+.translation-warning-panel h2 { margin: 0; color: #ffe0a0; font-size: 15px; }
+.translation-warning-panel p { margin: 8px 0 0; color: #d8c9a3; font-size: 13px; }
+.translation-warning-panel ul { display: grid; gap: 8px; padding: 0; margin: 12px 0 0; list-style: none; }
+.translation-warning-panel li { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: start; padding: 9px; border-radius: 7px; background: rgba(70, 54, 26, .58); color: #f5dfaa; font-size: 12px; }
+.translation-warning-panel li span { padding: 2px 6px; border-radius: 999px; background: #5f4520; color: #ffe5a9; font-weight: 700; }
+.translation-warning-panel li small { color: #d1c3a3; line-height: 1.45; overflow-wrap: anywhere; }

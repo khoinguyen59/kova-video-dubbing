@@ -117,6 +117,12 @@ export interface WorkflowProgressStep {
   detail?: string
 }
 
+export interface TranslationWarning {
+	cue_index: number
+	suspicious_words: string[]
+	text: string
+}
+
 export interface DesktopWorkflowSnapshot {
   workflow_task_id: string
   current_stage: string
@@ -128,5 +134,6 @@ export interface DesktopWorkflowSnapshot {
   source_srt_url?: string
 	translated_srt_url?: string
 	source_steps?: WorkflowProgressStep[]
-  artifacts?: WorkflowArtifact[]
+	translation_warnings?: TranslationWarning[]
+	artifacts?: WorkflowArtifact[]
 }

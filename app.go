@@ -169,18 +169,27 @@ type DesktopWorkflowProgressStep struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// TranslationWarning is advisory review data returned by the worker. It is
+// not a failure and never prevents the user from approving a translation.
+type TranslationWarning struct {
+	CueIndex        int      `json:"cue_index"`
+	SuspiciousWords []string `json:"suspicious_words"`
+	Text            string   `json:"text"`
+}
+
 type DesktopWorkflowSnapshot struct {
-	WorkflowTaskID   string                        `json:"workflow_task_id"`
-	CurrentStage     string                        `json:"current_stage"`
-	FailedStage      string                        `json:"failed_stage,omitempty"`
-	ProcessPercent   uint8                         `json:"process_percent"`
-	Message          string                        `json:"message"`
-	FailureReason    string                        `json:"failure_reason,omitempty"`
-	ReviewRequired   bool                          `json:"review_required"`
-	SourceSRTURL     string                        `json:"source_srt_url,omitempty"`
-	TranslatedSRTURL string                        `json:"translated_srt_url,omitempty"`
-	SourceSteps      []DesktopWorkflowProgressStep `json:"source_steps,omitempty"`
-	Artifacts        []DesktopWorkflowArtifact     `json:"artifacts,omitempty"`
+	WorkflowTaskID      string                        `json:"workflow_task_id"`
+	CurrentStage        string                        `json:"current_stage"`
+	FailedStage         string                        `json:"failed_stage,omitempty"`
+	ProcessPercent      uint8                         `json:"process_percent"`
+	Message             string                        `json:"message"`
+	FailureReason       string                        `json:"failure_reason,omitempty"`
+	ReviewRequired      bool                          `json:"review_required"`
+	SourceSRTURL        string                        `json:"source_srt_url,omitempty"`
+	TranslatedSRTURL    string                        `json:"translated_srt_url,omitempty"`
+	SourceSteps         []DesktopWorkflowProgressStep `json:"source_steps,omitempty"`
+	TranslationWarnings []TranslationWarning          `json:"translation_warnings,omitempty"`
+	Artifacts           []DesktopWorkflowArtifact     `json:"artifacts,omitempty"`
 }
 
 func NewApp() *App {
