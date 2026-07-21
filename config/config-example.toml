@@ -1,0 +1,130 @@
+[app]
+    segment_duration = 5 # Khoảng tách âm thanh, tính bằng phút; khuyến nghị 5–10
+    transcribe_parallel_num = 1 # Số tác vụ chép lời song song tối đa; khuyến nghị 1–3
+    translate_parallel_num = 3 # Số tác vụ dịch song song; giảm nếu API giới hạn TPM nghiêm ngặt
+    transcribe_max_attempts = 3 # Số lần thử lại chép lời tối đa
+    translate_max_attempts = 5 # Số lần thử lại dịch tối đa; tăng nếu model hay lỗi
+    max_sentence_length = 70 # Số ký tự tối đa mỗi câu trước khi tách; khuyến nghị 50–70
+    enable_block_vtt_batch = false # Bật dịch theo lô cho VTT cấp khối; mặc định tắt
+    vtt_batch_size = 10 # Kích thước mỗi lô dịch VTT
+    target_language_first = true # Đặt ngôn ngữ đích ở dòng trên trong SRT song ngữ
+    short_subtitle_max_chars = 20 # Số ký tự tiếng Anh tối đa mỗi dòng phụ đề ngắn
+    proxy = "" # Proxy mạng, ví dụ http://127.0.0.1:7890; có thể để trống
+
+[server]
+    host = "127.0.0.1"
+    port = 8888
+
+# Chỉ điền các cấu hình cần cho workflow Kova của bạn; không lưu API key vào file này.
+
+[llm] # KOVA API Gateway OpenAI-compatible; temporary free-model-only policy
+    provider = "openai-compatible"
+    base_url = "http://3.27.172.90/v1"
+    api_key = "" # Không commit key; đặt trong config/config.toml bị Git ignore hoặc biến môi trường bên dưới
+    api_key_env = "KOVA_API_GATEWAY_API_KEY"
+    model = "oc/deepseek-v4-flash-free" # Chỉ chọn một model free trong dropdown KOVA
+    json = false # Bật true chỉ khi endpoint của bạn hỗ trợ JSON mode
+
+[transcribe] # Chép lời video sang văn bản; chọn provider rồi điền cấu hình tương ứng
+    provider = "openai" # Lựa chọn: openai, fasterwhisper, whisperkit, whisper.cpp, aliyun
+    enable_gpu_acceleration = false # Bật tăng tốc GPU cho fasterwhisper khi môi trường hỗ trợ
+    [transcribe.openai]
+        base_url = ""
+        api_key = ""
+        model = "whisper-1"
+    [transcribe.fasterwhisper]
+        model = "medium" # Model fasterwhisper: tiny, medium hoặc large-v2; khuyến nghị medium trở lên
+    [transcribe.whisperkit]
+        model = "large-v2" # Model whisperkit khả dụng: large-v2
+    [transcribe.whispercpp]
+        model = "large-v2" # Model whispercpp khả dụng: large-v2
+    [transcribe.aliyun] # Điền đầy đủ phần này khi chọn provider aliyun
+        [transcribe.aliyun.oss]
+            access_key_id = ""
+            access_key_secret = ""
+            bucket = ""
+        [transcribe.aliyun.speech]
+            access_key_id = ""
+            access_key_secret = ""
+            app_key= ""
+
+[tts]
+    provider = "omnivoice" # Lựa chọn: openai, aliyun, edge-tts, minimax, omnivoice, gateway
+    [tts.openai]
+        base_url = ""
+        api_key = ""
+        model = "" # gpt-4o-mini-tts, tts-1, tts-1-hd
+    [tts.minimax] # Điền phần này khi chọn MiniMax TTS (T2A v2)
+        base_url = "" # Để trống dùng https://api.minimax.io; có thể dùng https://api.minimaxi.com
+        api_key = "" # API key MiniMax
+        model = "" # Để trống dùng speech-2.8-hd; lựa chọn khác: speech-2.8-turbo, speech-2.6-hd, speech-2.6-turbo
+    [tts.omnivoice] # Chỉ dùng worker GPU Google Colab qua URL HTTPS
+        base_url = "" # Dán URL https://…trycloudflare.com mà notebook in ra
+        language = "vi"
+        reference_audio = "" # Deprecated: Kova selects the reference audio per job and never persists it here
+        reference_text = "" # Transcript of reference_audio; recommended when cloning
+        instruct = "" # Optional voice style instruction
+        speed = 1.0
+        num_step = 32
+        request_timeout_seconds = 1800
+        require_reference_audio = true # Bắt buộc audio mẫu cho mỗi job clone
+        remote_only = true # Không chạy OmniVoice trên máy desktop
+        require_cuda = true # Worker Colab phải báo device=cuda
+    [tts.gateway] # 9router/OpenAI-compatible; preset TTS, không phải clone giọng
+        endpoint = "http://3.27.172.90/v1" # Client tự chuẩn hóa thành /v1/audio/speech
+        api_key = "" # Không commit key; dùng config/config.toml local hoặc api_key_env
+        api_key_env = "KOVA_API_GATEWAY_API_KEY"
+        model = "google-tts/vi" # Đã xác minh với gateway thật, trả MP3 binary
+        response_format = "" # Empty matches 9Router's model+input example (MP3 binary); set wav if your gateway supports it
+    [tts.aliyun] # Điền đầy đủ phần này khi chọn provider aliyun
+        [tts.aliyun.oss]
+            access_key_id = ""
+            access_key_secret = ""
+            bucket = ""
+        [tts.aliyun.speech]
+            access_key_id = ""
+            access_key_secret = ""
+            app_key= ""
+
+[dubbing]
+    min_subtitle_duration = 2.5 # Thời lượng phụ đề ngắn nhất để lồng tiếng; câu ngắn sẽ ưu tiên ghép
+    max_chunk_size = 5 # Số cue phụ đề tối đa trong một đoạn lồng tiếng
+    gap_tolerance = 1.5 # Khoảng trống giữa cue có thể hấp thụ, tính bằng giây
+    speed_min = 0.95 # Hệ số tốc độ chậm nhất cho phép
+    speed_accept = 1.08 # Vượt 1.08x cần người dùng kiểm tra độ tự nhiên
+    speed_max = 1.12 # Vượt 1.12x phải viết lại lời đọc trước khi duyệt
+    enable_text_rewrite = true # Cho phép LLM viết lại câu cho lời đọc tự nhiên
+    rewrite_max_attempts = 2 # Số lần viết lại tối đa cho mỗi cue
+    estimator = "statistical" # Bộ ước tính thời lượng; hiện hỗ trợ statistical
+
+[image] # Cấu hình tạo ảnh bìa
+    provider = "openai-compatible" # Hiện hỗ trợ API tương thích OpenAI Images
+    [image.openai]
+        base_url = "" # Base URL tạo ảnh; để trống dùng OpenAI, gateway thường kết thúc bằng /v1
+        api_key = "" # API key tạo ảnh
+        model = "gpt-image-1" # Model tạo ảnh, ví dụ gpt-image-1 hoặc model tương thích của gateway
+
+# Kova Auto-Builder always creates a reviewable CapCut spec first. Choose
+# pycapcut for the complete Circle/Rectangle Blur Mask path; it needs a
+# user-selected CapCut Draft directory and `pip install pycapcut` in the
+# selected Python. capcut-cli is optional and is intentionally refused when
+# a blur mask is present, so Kova never silently creates an uncensored draft.
+[creator]
+    ffprobe_path = "ffprobe"
+    node_path = "node"
+    capcut_cli_path = "" # e.g. C:\\tools\\capcut-cli\\dist\\index.js
+    compiler_backend = "pycapcut" # pycapcut | capcut-cli
+    python_path = "python"
+    pycapcut_bridge_path = "scripts/kova_pycapcut_builder.py"
+    capcut_draft_root = "" # Select your existing CapCut Draft folder in Kova Settings
+    default_output_dir = "output"
+    compile_capcut_draft = false
+
+# Offline Visual Subtitle OCR bridge. Install Paddle/PaddleOCR in this Python
+# environment once. Kova first tries CUDA then repeats exactly the same ROI on
+# CPU when the NVIDIA stack is unavailable.
+[visual_ocr]
+    python_path = "python"
+    script_path = "scripts/kova_visual_ocr.py"
+    prefer_gpu = true
+    sample_interval_ms = 250

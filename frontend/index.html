@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a1222" />
+    <title>KOVA · Video Localization Studio</title>
+    <style>
+      #kova-startup-fallback { min-height: 100vh; display: grid; place-items: center; padding: 24px; color: #eef3ff; background: #0a1222; font-family: "Segoe UI", Arial, sans-serif; }
+      #kova-startup-fallback > div { max-width: 560px; padding: 28px; border: 1px solid #334a78; border-radius: 14px; background: #111e36; box-shadow: 0 16px 48px #0008; }
+      #kova-startup-fallback h1 { margin: 0 0 8px; font-size: 22px; }
+      #kova-startup-fallback p { margin: 0; color: #bfcae2; line-height: 1.55; }
+      #kova-startup-fallback[data-error="true"] h1 { color: #ffb4b4; }
+      #kova-startup-fallback code { display: block; margin-top: 12px; color: #ffd9a6; overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <div id="kova-startup-fallback" role="status" aria-live="polite">
+      <div><h1>Đang khởi động KOVA…</h1><p>KOVA đang tải giao diện desktop.</p></div>
+    </div>
+    <div id="root"></div>
+    <script>
+      window.__kovaStartupError = function (message) {
+        var box = document.getElementById('kova-startup-fallback');
+        if (!box) return;
+        box.dataset.error = 'true';
+        box.innerHTML = '<div><h1>KOVA không thể khởi tạo giao diện</h1><p>Hãy gửi nội dung lỗi bên dưới để xử lý.</p><code></code></div>';
+        box.querySelector('code').textContent = String(message || 'Unknown startup error');
+      };
+      window.addEventListener('error', function (event) {
+        window.__kovaStartupError(event.error && event.error.message ? event.error.message : event.message);
+      }, true);
+      window.addEventListener('unhandledrejection', function (event) {
+        window.__kovaStartupError(event.reason && event.reason.message ? event.reason.message : event.reason);
+      });
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

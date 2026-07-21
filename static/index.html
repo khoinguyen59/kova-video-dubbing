@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Kova · Browser Test Console</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --line: #e4e9f2;
+      --text: #172033;
+      --muted: #667085;
+      --brand: #5b5bd6;
+      --brand-soft: #eeeeff;
+      --ok: #13795b;
+      --danger: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font: 15px/1.5 Inter, "Segoe UI", sans-serif; }
+    button, input, select, textarea { font: inherit; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 310px 1fr; }
+    aside { position: sticky; top: 0; height: 100vh; padding: 28px 20px; background: #fbfcff; border-right: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 12px; margin: 0 8px 28px; }
+    .mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; color: white; background: linear-gradient(135deg,#7357e8,#4f79ed); font-weight: 800; }
+    .brand h1 { margin: 0; font-size: 22px; letter-spacing: .08em; }
+    .brand p { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
+    nav { display: grid; gap: 8px; }
+    .nav { width: 100%; padding: 13px 14px; border: 1px solid transparent; border-radius: 12px; color: var(--text); background: transparent; text-align: left; cursor: pointer; font-weight: 650; }
+    .nav:hover { background: #f1f3fa; }
+    .nav.active { color: #4949c8; background: var(--brand-soft); border-color: #dadaff; }
+    .aside-note { position: absolute; left: 28px; right: 28px; bottom: 24px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    main { padding: 42px clamp(24px,5vw,72px); }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
+    .topbar h2 { margin: 0; font-size: 28px; }
+    .status { padding: 8px 12px; border-radius: 999px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); }
+    .status.ok { color: var(--ok); border-color: #a7decf; background: #edfbf6; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .card { max-width: 980px; padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 12px 40px rgba(26,36,60,.05); }
+    .card h3 { margin: 0 0 4px; font-size: 19px; }
+    .lead { margin: 0 0 22px; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
+    label { display: grid; gap: 7px; color: #344054; font-weight: 650; }
+    input, select, textarea { width: 100%; padding: 11px 12px; color: var(--text); background: white; border: 1px solid #cfd6e4; border-radius: 10px; }
+    textarea { min-height: 110px; resize: vertical; }
+    .full { grid-column: 1/-1; }
+    .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .check { display: flex; align-items: center; gap: 9px; font-weight: 500; }
+    .check input { width: auto; }
+    .btn { padding: 11px 16px; border: 1px solid #cfd6e4; border-radius: 10px; background: white; cursor: pointer; font-weight: 700; }
+    .btn.primary { color: white; border-color: var(--brand); background: var(--brand); }
+    .btn:hover { filter: brightness(.97); }
+    .hint { padding: 12px 14px; border-radius: 10px; color: #475467; background: #f7f8fc; border: 1px solid var(--line); font-size: 13px; }
+    pre { min-height: 190px; margin: 18px 0 0; padding: 16px; overflow: auto; border-radius: 12px; color: #d8e7ff; background: #111827; white-space: pre-wrap; }
+    @media (max-width: 850px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { position: static; height: auto; }
+      .aside-note { position: static; margin: 20px 8px 0; }
+      main { padding: 24px 18px; }
+      .grid { grid-template-columns: 1fr; }
+      .full { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand">
+      <div class="mark">K</div>
+      <div><h1>KOVA</h1><p>Browser Test Console</p></div>
+    </div>
+    <nav>
+      <button class="nav active" data-page="source">01 · Nguồn video / Video source</button>
+      <button class="nav" data-page="translation">02 · Dịch và phụ đề / Translation</button>
+      <button class="nav" data-page="voice">03 · Giọng cố định / Fixed voice</button>
+      <button class="nav" data-page="render">04 · Xuất hình / Video output</button>
+      <button class="nav" data-page="run">05 · Chạy và nhận output / Run</button>
+    </nav>
+    <div class="aside-note">
+      Đây là giao diện kiểm thử trên trình duyệt. Sản phẩm chính là Kova Desktop.<br>
+      This browser console is for testing; Kova Desktop is the primary app.
+    </div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <h2 id="pageTitle">01 · Nguồn video</h2>
+      <span id="apiStatus" class="status">Đang kiểm tra Kova API…</span>
+    </div>
+
+    <section id="source" class="page active">
+      <div class="card">
+        <h3>Nguồn video / Video source</h3>
+        <p class="lead">Chọn một file trên máy hoặc dán URL công khai.</p>
+        <div class="grid">
+          <label class="full">URL video
+            <input id="videoUrl" placeholder="https://youtu.be/…">
+          </label>
+          <label class="full">File video từ máy / Local video
+            <input id="videoFile" type="file" accept="video/*">
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section id="translation" class="page">
+      <div class="card">
+        <h3>Dịch và phụ đề / Translation and subtitles</h3>
+        <p class="lead">Mặc định dịch tiếng Anh sang tiếng Việt và bảo vệ tên riêng.</p>
+        <div class="grid">
+          <label>Ngôn ngữ nguồn / Source
+            <select id="originLang"><option value="en">Tiếng Anh / English</option><option value="vi">Tiếng Việt / Vietnamese</option></select>
+          </label>
+          <label>Ngôn ngữ đích / Target
+            <select id="targetLang"><option value="vi">Tiếng Việt / Vietnamese</option><option value="en">Tiếng Anh / English</option></select>
+          </label>
+          <label class="full">Tên riêng giữ nguyên / Protected names
+            <textarea id="protectedTerms" placeholder="Mỗi dòng một tên / One name per line"></textarea>
+          </label>
+          <label class="check full"><input id="bilingual" type="checkbox"> Phụ đề song ngữ / Bilingual subtitles</label>
+        </div>
+      </div>
+    </section>
+
+    <section id="voice" class="page">
+      <div class="card">
+        <h3>Giọng lồng tiếng cố định / Fixed dubbing voice</h3>
+        <p class="lead">Engine và profile được giữ nguyên từ đầu đến cuối video.</p>
+        <div class="grid">
+          <label class="check full"><input id="ttsEnabled" type="checkbox" checked> Bật lồng tiếng / Enable dubbing</label>
+          <label>Công cụ TTS / TTS engine
+            <select id="ttsEngine">
+              <option value="omnivoice">KOVA Voice Studio · Clone giọng</option>
+              <option value="google-tts/vi">Google TTS · Vietnamese · KOVA API Gateway</option>
+              <option value="google-tts/en">Google TTS · English · KOVA API Gateway</option>
+              <option value="edge-tts/vi-VN-HoaiMyNeural">Microsoft Edge TTS · Vietnamese Hoai My · KOVA API Gateway</option>
+              <option value="edge-tts/vi-VN-NamMinhNeural">Microsoft Edge TTS · Vietnamese Nam Minh · KOVA API Gateway</option>
+            </select>
+          </label>
+          <label>Giọng/profile / Voice profile
+            <select id="voiceProfile"><option value="auto">Tự động / Auto</option><option value="clone">Audio tham chiếu / Reference audio</option></select>
+          </label>
+          <label class="full">OmniVoice Worker URL (Google Colab GPU)
+            <input id="workerUrl" placeholder="https://…trycloudflare.com">
+          </label>
+          <div class="row full">
+            <a class="btn" href="https://colab.research.google.com/" target="_blank" rel="noreferrer">Mở Google Colab / Open Colab</a>
+            <span class="hint">Mở voice-studio/notebooks/Kova_Voice_Studio_GPU.ipynb → Run all trên GPU → copy URL HTTPS tunnel và token → dán vào Worker URL. Không clone trên máy desktop.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="render" class="page">
+      <div class="card">
+        <h3>Xuất hình và tinh chỉnh / Video output</h3>
+        <p class="lead">Chọn MP4 cần tạo sau khi dịch và lồng tiếng.</p>
+        <div class="grid">
+          <label>Định dạng output / Output layout
+            <select id="embedType"><option value="horizontal">Ngang 16:9 / Landscape</option><option value="vertical">Dọc 9:16 / Portrait</option><option value="all">Cả hai / Both</option><option value="none">Chỉ SRT + audio / No video</option></select>
+          </label>
+          <label>Tiêu đề dọc / Portrait title
+            <input id="majorTitle" placeholder="Không bắt buộc / Optional">
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section id="run" class="page">
+      <div class="card">
+        <h3>Chạy và nhận output / Run and outputs</h3>
+        <p class="lead">Console này dùng Kova API v1; trạng thái và link output sẽ hiện bên dưới.</p>
+        <div class="row">
+          <button id="runButton" class="btn primary">Chạy Kova / Run Kova</button>
+          <button id="pollButton" class="btn">Kiểm tra trạng thái / Poll status</button>
+          <span id="jobState" class="hint">Chưa có job / No job</span>
+        </div>
+        <pre id="console">Kova browser test console ready.</pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let taskId = "";
+  const titles = {
+    source: "01 · Nguồn video",
+    translation: "02 · Dịch và phụ đề",
+    voice: "03 · Giọng lồng tiếng cố định",
+    render: "04 · Xuất hình và tinh chỉnh",
+    run: "05 · Chạy và nhận output"
+  };
+
+  document.querySelectorAll(".nav").forEach(button => button.addEventListener("click", () => {
+    document.querySelectorAll(".nav,.page").forEach(el => el.classList.remove("active"));
+    button.classList.add("active");
+    $(button.dataset.page).classList.add("active");
+    $("pageTitle").textContent = titles[button.dataset.page];
+  }));
+
+  async function jsonRequest(url, options = {}) {
+    const response = await fetch(url, options);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.msg || `HTTP ${response.status}`);
+    return data;
+  }
+
+  async function checkAPI() {
+    try {
+      const result = await jsonRequest("/api/v1/status");
+      $("apiStatus").textContent = `${result.data.name} API ${result.data.api_version} · Ready`;
+      $("apiStatus").classList.add("ok");
+    } catch (error) {
+      $("apiStatus").textContent = "Kova API offline";
+      $("apiStatus").classList.remove("ok");
+    }
+  }
+
+  async function sourceURL() {
+    const file = $("videoFile").files[0];
+    if (!file) {
+      const url = $("videoUrl").value.trim();
+      if (!url) throw new Error("Hãy chọn file hoặc nhập URL / Select a file or enter a URL");
+      return url;
+    }
+    const body = new FormData();
+    body.append("file", file);
+    const result = await jsonRequest("/api/v1/files", { method: "POST", body });
+    return result.data.file_path || result.data.file_paths[0];
+  }
+
+  async function applyVoiceConfig() {
+    const current = await jsonRequest("/api/v1/config");
+    const next = current.data;
+    const engine = $("ttsEngine").value;
+    if (engine === "omnivoice") {
+      next.tts.provider = "omnivoice";
+      const worker = $("workerUrl").value.trim();
+      if (worker) next.tts.omnivoice.baseUrl = worker;
+    } else {
+      next.tts.provider = "gateway";
+      next.tts.gateway.model = engine;
+    }
+    await jsonRequest("/api/v1/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next)
+    });
+  }
+
+  async function runJob() {
+    $("runButton").disabled = true;
+    $("jobState").textContent = "Đang tạo job / Creating job…";
+    try {
+      const url = await sourceURL();
+      if ($("ttsEnabled").checked) await applyVoiceConfig();
+      const protectedTerms = $("protectedTerms").value.split(/\r?\n|,/).map(x => x.trim()).filter(Boolean);
+      const payload = {
+        url,
+        origin_lang: $("originLang").value,
+        target_lang: $("targetLang").value,
+        bilingual: $("bilingual").checked ? 1 : 0,
+        translation_subtitle_pos: 2,
+        modal_filter: 1,
+        tts: $("ttsEnabled").checked ? 1 : 0,
+        tts_voice_code: $("voiceProfile").value,
+        protect_terms: protectedTerms,
+        language: "vi",
+        embed_subtitle_video_type: $("embedType").value,
+        vertical_major_title: $("majorTitle").value.trim()
+      };
+      const result = await jsonRequest("/api/v1/jobs/subtitle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      taskId = result.data.task_id;
+      $("jobState").textContent = `Job ${taskId}`;
+      $("console").textContent = JSON.stringify(result, null, 2);
+      await pollJob();
+    } catch (error) {
+      $("jobState").textContent = "Lỗi / Error";
+      $("console").textContent = error.message;
+    } finally {
+      $("runButton").disabled = false;
+    }
+  }
+
+  async function pollJob() {
+    if (!taskId) {
+      $("console").textContent = "Chưa có task_id / No task_id";
+      return;
+    }
+    try {
+      const result = await jsonRequest(`/api/v1/jobs/subtitle?taskId=${encodeURIComponent(taskId)}`);
+      $("console").textContent = JSON.stringify(result, null, 2);
+      $("jobState").textContent = `Tiến độ / Progress: ${result.data.process_percent || 0}%`;
+    } catch (error) {
+      $("console").textContent = error.message;
+    }
+  }
+
+  $("runButton").addEventListener("click", runJob);
+  $("pollButton").addEventListener("click", pollJob);
+  checkAPI();
+</script>
+</body>
+</html>

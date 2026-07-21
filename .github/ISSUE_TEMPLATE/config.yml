@@ -1,0 +1,6 @@
+# .github/ISSUE_TEMPLATE/config.yml
+
+blank_issues_enabled: false
+
+# Add Kova-specific contact links once the Kova repository URL is published.
+contact_links: []

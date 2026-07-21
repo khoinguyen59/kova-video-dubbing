@@ -1,0 +1,8 @@
+# Pinned Colab runtime contract. Do not replace with "latest" in notebook.
+fastapi==0.115.14
+uvicorn[standard]==0.35.0
+python-multipart==0.0.20
+soundfile==0.13.1
+transformers==5.3.0
+# torch/torchaudio cu128 are installed from the PyTorch CUDA index in the
+# notebook before this file is processed.

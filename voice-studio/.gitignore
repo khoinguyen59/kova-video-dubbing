@@ -1,0 +1,5 @@
+data/
+references/
+__pycache__/
+*.py[cod]
+.pytest_cache/

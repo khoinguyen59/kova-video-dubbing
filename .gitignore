@@ -1,0 +1,42 @@
+.idea
+.claude/
+.github/
+docs/plans/
+docs/superpowers/
+tasks/
+cookies.txt
+.vscode/
+config/config.toml
+bin/
+models/
+uploads/
+app.log
+build/
+.retired-builds/
+dist/
+.gocache/
+.gomodcache/
+.tools/
+test-runs/
+__pycache__/
+*.py[cod]
+
+# Wails React frontend. Keep a tiny tracked dist/index.html placeholder so the
+# Go embed target can compile before the first frontend build; Vite replaces it
+# during `wails build`.
+/frontend/node_modules/
+/frontend/dist/*
+!/frontend/dist/index.html
+/frontend/wailsjs/
+/frontend/package.json.md5
+
+# Superpowers Skills Framework (local junction to ~/.superpowers)
+.superpowers
+
+# MACOS
+.DS_Store
+._*
+KrillinAI.exe
+.codegraph/
+.deepseek/
+run.log

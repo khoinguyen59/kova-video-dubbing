@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KOVA Voice Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="mark">K</span><span>KOVA <small>VOICE STUDIO</small></span></div>
+      <div class="top-actions">
+        <span id="health" class="health idle">Chưa kết nối</span>
+        <label class="locale"><span>Ngôn ngữ</span><select id="locale"><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
+      </div>
+    </header>
+    <main class="layout">
+      <aside class="library">
+        <div class="section-heading"><p data-i18n="libraryEyebrow">THƯ VIỆN GIỌNG</p><h1 data-i18n="yourVoices">Giọng của bạn</h1></div>
+        <button id="reload-profiles" class="quiet" data-i18n="reload">Tải lại danh sách</button>
+        <div id="profiles" class="profile-list"><p class="empty" data-i18n="connectFirst">Nhập token rồi tải danh sách giọng.</p></div>
+      </aside>
+      <section class="studio">
+        <div class="hero"><p data-i18n="eyebrow">HỒ SƠ GIỌNG ĐỘC LẬP</p><h2 data-i18n="headline">Tạo một giọng cố định cho toàn bộ video.</h2><p data-i18n="subtitle">Voice Studio quản lý profile và audio tham chiếu. KOVA chỉ chọn ID profile đã sẵn sàng, không giữ audio clone.</p></div>
+        <section class="card connection-card">
+          <div><h3 data-i18n="workerTitle">Kết nối worker</h3><p data-i18n="workerHint">Dán URL và token tạm thời do Colab in ra. Token chỉ được giữ trong bộ nhớ của trang này.</p></div>
+          <label><span data-i18n="token">Worker token</span><input id="token" type="password" autocomplete="off" data-placeholder="tokenPlaceholder" placeholder="Bearer token"></label>
+          <button id="check-health" class="secondary" data-i18n="check">Kiểm tra kết nối</button>
+        </section>
+        <section class="card form-card">
+          <div><h3 data-i18n="createTitle">Tạo hồ sơ giọng</h3><p data-i18n="createHint">Dùng audio mà bạn có quyền sử dụng. File phải là WAV, MP3 hoặc FLAC dài 3–30 giây; 10 giây là mức khuyến nghị.</p></div>
+          <div class="form-grid">
+            <label><span data-i18n="voiceName">Tên giọng</span><input id="profile-name" maxlength="120" data-placeholder="namePlaceholder" placeholder="Ví dụ: Người dẫn chuyện"></label>
+            <label><span data-i18n="voiceLanguage">Ngôn ngữ</span><select id="profile-language"><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
+            <label class="file-input"><span data-i18n="referenceAudio">Audio tham chiếu</span><input id="reference-audio" type="file" accept=".wav,.mp3,.flac,audio/wav,audio/mpeg,audio/flac"></label>
+          </div>
+          <label class="consent"><input id="consent" type="checkbox"><span data-i18n="consent">Tôi xác nhận có quyền sử dụng và clone giọng của audio tham chiếu này.</span></label>
+          <div class="actions"><button id="create-profile" class="primary" data-i18n="createProfile">Tạo hồ sơ giọng</button><p id="message" role="status"></p></div>
+        </section>
+        <section class="card integration"><h3 data-i18n="integrationTitle">Tích hợp với KOVA</h3><ol><li data-i18n="integrationOne">Mở notebook Colab trong KOVA và chạy worker GPU.</li><li data-i18n="integrationTwo">Tạo hoặc chọn một profile trong Voice Studio này.</li><li data-i18n="integrationThree">Trong bước “Giọng lồng tiếng cố định”, tải profiles và chọn đúng một profile cho cả job.</li></ol><p data-i18n="integrationNote">Việc tạo audio chỉ bắt đầu khi bạn chủ động chạy bước lồng tiếng trong KOVA.</p></section>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
