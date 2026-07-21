@@ -115,7 +115,12 @@ type WorkflowProgressStep struct {
 type TranslationWarning struct {
 	CueIndex        int      `json:"cue_index"`
 	SuspiciousWords []string `json:"suspicious_words"`
-	Text            string   `json:"text"`
+	// Reason is empty for a normal language-detection warning. It is
+	// "model_empty" when the model did not produce a usable translation and
+	// KOVA deliberately kept a clearly marked source-text placeholder for the
+	// user to edit or explicitly approve.
+	Reason string `json:"reason,omitempty"`
+	Text   string `json:"text"`
 }
 
 // SubtitleWorkflowData is returned by the staged endpoints. The desktop must

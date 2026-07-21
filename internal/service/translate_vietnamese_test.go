@@ -71,6 +71,33 @@ func TestTranslationReviewWarningsAreAdvisoryAndCueSpecific(t *testing.T) {
 	}
 }
 
+func TestBatchTranslationKeepsAnEditableCueWhenModelReturnsEmptyText(t *testing.T) {
+	// A gateway can return a valid JSON array but leave one item blank. That is
+	// a review condition, not a reason to discard every completed cue in the
+	// batch and fail the workflow.
+	translator := &Translator{chatCompleter: staticChatCompleter{
+		response: `{"translations":[{"index":1,"text":""}]}`,
+	}}
+	blocks := []*util.SrtBlock{{
+		Index:                  112,
+		OriginLanguageSentence: "A blank model response must remain editable.",
+	}}
+
+	if err := translator.BatchTranslateSrtBlocks(blocks, "en", "vi", nil); err != nil {
+		t.Fatalf("BatchTranslateSrtBlocks() error = %v", err)
+	}
+	if !isUntranslatedCuePlaceholder(blocks[0].TargetLanguageSentence) {
+		t.Fatalf("target cue = %q, want an editable missing-translation placeholder", blocks[0].TargetLanguageSentence)
+	}
+	warnings := translationReviewWarnings(blocks, "en", "vi")
+	if len(warnings) != 1 || warnings[0].CueIndex != 112 || warnings[0].Reason != "model_empty" {
+		t.Fatalf("translationReviewWarnings() = %#v, want model_empty warning for cue 112", warnings)
+	}
+	if message := translationReviewMessage(warnings); !containsVietnameseMarker(message) {
+		t.Fatalf("translationReviewMessage() = %q, want Vietnamese guidance", message)
+	}
+}
+
 func TestEnforceTargetLanguagePreservesVietnameseVTTWithVideo(t *testing.T) {
 	// The source-language metadata can say English even when YouTube's VTT cue
 	// is already Vietnamese. This must not require an LLM round trip or fail

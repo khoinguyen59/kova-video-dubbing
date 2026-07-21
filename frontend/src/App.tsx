@@ -469,7 +469,16 @@ export default function App() {
 			{activeStage === 'translation' && translationWarnings.length > 0 && <section className="translation-warning-panel" aria-live="polite">
 				<h2>{locale === 'vi' ? 'Cảnh báo từ nghi là tiếng Anh — không chặn duyệt' : 'Possible English words — approval is not blocked'}</h2>
 				<p>{locale === 'vi' ? 'Bản dịch đã được tạo. Kiểm tra các cue bên dưới, sửa SRT nếu cần; nếu các từ là tên riêng/thuật ngữ hợp lệ, bạn có thể bấm Duyệt đầu ra để tiếp tục.' : 'The translation is ready. Review the cues below and edit the SRT if needed. If they are valid names or terms, you may approve the output and continue.'}</p>
-				<ul>{translationWarnings.map((warning) => <li key={`${warning.cue_index}-${warning.suspicious_words.join('-')}`}><strong>{locale === 'vi' ? `Cue ${warning.cue_index}` : `Cue ${warning.cue_index}`}</strong><span>{warning.suspicious_words.join(', ')}</span><small>{warning.text}</small></li>)}</ul>
+				<ul>{translationWarnings.map((warning) => {
+					const missingModelOutput = warning.reason === 'model_empty'
+					const label = missingModelOutput
+						? (locale === 'vi' ? 'Chưa có bản dịch' : 'No model translation')
+						: warning.suspicious_words.join(', ')
+					const detail = missingModelOutput
+						? (locale === 'vi' ? `Model không trả nội dung; cue được giữ nguyên để bạn dịch/sửa: ${warning.text}` : `The model returned no text; the source cue was kept for you to translate/edit: ${warning.text}`)
+						: warning.text
+					return <li key={`${warning.cue_index}-${warning.reason ?? ''}-${warning.suspicious_words.join('-')}`}><strong>{locale === 'vi' ? `Cue ${warning.cue_index}` : `Cue ${warning.cue_index}`}</strong><span>{label}</span><small>{detail}</small></li>
+				})}</ul>
 			</section>}
 			{activeStage === 'dubbing_audio' && (
               <div className="worker-form">

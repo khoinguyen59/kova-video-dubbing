@@ -174,6 +174,7 @@ type DesktopWorkflowProgressStep struct {
 type TranslationWarning struct {
 	CueIndex        int      `json:"cue_index"`
 	SuspiciousWords []string `json:"suspicious_words"`
+	Reason          string   `json:"reason,omitempty"`
 	Text            string   `json:"text"`
 }
 

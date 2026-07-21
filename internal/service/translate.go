@@ -436,13 +436,31 @@ IMPORTANT: The previous translation was inadequate. Please ensure:
 	return originalPrompt + enhancement
 }
 
+const untranslatedCuePlaceholderPrefix = "[[KOVA_TRANSLATION_MISSING]]"
+
+// untranslatedCuePlaceholder makes a model omission explicit in the editable
+// target SRT. Keeping the source text is intentional: dropping a cue would
+// desynchronise the dialogue, while silently accepting an empty cue would hide
+// the problem from the user.
+func untranslatedCuePlaceholder(origin string) string {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return untranslatedCuePlaceholderPrefix
+	}
+	return untranslatedCuePlaceholderPrefix + " " + origin
+}
+
+func isUntranslatedCuePlaceholder(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), untranslatedCuePlaceholderPrefix)
+}
+
 // enforceTargetLanguage is retained as the common final normalizer for legacy
-// callers. It no longer blocks a completed translation because suspected
-// English is a review warning, not a runtime failure.
+// callers. It no longer blocks a completed translation: suspected English is a
+// review warning, and an empty model reply becomes a visible editable draft.
 func (t *Translator) enforceTargetLanguage(origin, translated string, originLang, targetLang types.StandardLanguageCode) (string, error) {
 	translated = strings.TrimSpace(translated)
 	if translated == "" {
-		return "", errors.New("translation is empty")
+		return untranslatedCuePlaceholder(origin), nil
 	}
 	return translated, nil
 }
@@ -501,6 +519,14 @@ func translationReviewWarnings(blocks []*util.SrtBlock, originLang, targetLang s
 		if block == nil {
 			continue
 		}
+		if isUntranslatedCuePlaceholder(block.TargetLanguageSentence) {
+			warnings = append(warnings, dto.TranslationWarning{
+				CueIndex: block.Index,
+				Reason:   "model_empty",
+				Text:     strings.TrimSpace(block.TargetLanguageSentence),
+			})
+			continue
+		}
 		words := suspiciousVietnameseWords(block.OriginLanguageSentence, block.TargetLanguageSentence)
 		if len(words) == 0 {
 			continue
@@ -517,6 +543,15 @@ func translationReviewWarnings(blocks []*util.SrtBlock, originLang, targetLang s
 func translationReviewMessage(warnings []dto.TranslationWarning) string {
 	if len(warnings) == 0 {
 		return "Đã tạo bản dịch. Hãy xem/sửa SRT tiếng Việt rồi bấm Duyệt bản dịch."
+	}
+	missingModelOutput := 0
+	for _, warning := range warnings {
+		if warning.Reason == "model_empty" {
+			missingModelOutput++
+		}
+	}
+	if missingModelOutput > 0 {
+		return fmt.Sprintf("Đã tạo SRT nháp. Có %d cue chưa được model dịch và %d cue có từ nghi là tiếng Anh; hãy kiểm tra/sửa hoặc bấm Duyệt để tiếp tục.", missingModelOutput, len(warnings)-missingModelOutput)
 	}
 	return fmt.Sprintf("Đã tạo bản dịch. Phát hiện %d cue có từ nghi là tiếng Anh; hãy kiểm tra/sửa hoặc bấm Duyệt để tiếp tục.", len(warnings))
 }
@@ -934,10 +969,11 @@ func (t *Translator) BatchTranslateSrtBlocks(blocks []*util.SrtBlock, originLang
 					targetLangCode)
 
 				if err != nil {
-					log.GetLogger().Error("单独翻译失败，终止以防输出源语言",
+					log.GetLogger().Warn("single subtitle translation failed; keeping an editable source placeholder",
 						zap.Error(err),
 						zap.Int("块索引", block.Index))
-					return fmt.Errorf("subtitle %d translation failed: %w", block.Index, err)
+					block.TargetLanguageSentence = untranslatedCuePlaceholder(block.OriginLanguageSentence)
+					continue
 				}
 				verified, verifyErr := t.enforceTargetLanguage(block.OriginLanguageSentence, translatedText, originLangCode, targetLangCode)
 				if verifyErr != nil {

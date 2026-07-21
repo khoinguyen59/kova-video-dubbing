@@ -120,6 +120,7 @@ export interface WorkflowProgressStep {
 export interface TranslationWarning {
 	cue_index: number
 	suspicious_words: string[]
+	reason?: 'model_empty'
 	text: string
 }
 
