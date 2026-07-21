@@ -19,7 +19,18 @@ type StartVideoSubtitleTaskReq struct {
 	VerticalMajorTitle        string   `json:"vertical_major_title"`
 	VerticalMinorTitle        string   `json:"vertical_minor_title"`
 	OriginLanguageWordOneLine int      `json:"origin_language_word_one_line"`
-	VttSwitch                 bool     `json:"vtt_switch"` // 是否使用VTT格式字幕文件
+	// SourceMethod chooses the explicit source-script branch. "speech_to_text"
+	// transcribes audio; "visual_ocr" reads visible/hardcoded captions from
+	// video frames and produces the same reviewable source SRT.
+	SourceMethod        string  `json:"source_method"`
+	OCRLanguage         string  `json:"ocr_language"`
+	OCRRegionX          float64 `json:"ocr_region_x"`
+	OCRRegionY          float64 `json:"ocr_region_y"`
+	OCRRegionWidth      float64 `json:"ocr_region_width"`
+	OCRRegionHeight     float64 `json:"ocr_region_height"`
+	OCRSampleIntervalMS int     `json:"ocr_sample_interval_ms"`
+	OCRPreferGPU        bool    `json:"ocr_prefer_gpu"`
+	VttSwitch           bool    `json:"vtt_switch"` // 是否使用VTT格式字幕文件
 }
 
 type StartVideoSubtitleTaskResData struct {

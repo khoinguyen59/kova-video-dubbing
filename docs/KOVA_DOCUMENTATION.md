@@ -6,7 +6,8 @@ Vietnamese/English; the optional local HTTP page is only a diagnostic surface.
 ## Main workflow / Luồng chính
 
 1. **Video source / Nguồn video** — select local media or a public URL, then
-   start and review the source subtitle artifact.
+   choose timed **Speech-to-text** or **Visual OCR** of visible hardcoded
+   captions. Both produce the same editable source SRT/script review gate.
 2. **Translation / Dịch và phụ đề** — use the KOVA API Gateway free-model
    dropdown; edit and approve the translated SRT.
 3. **Fixed voice / Giọng lồng tiếng cố định** — choose one TTS engine and one
@@ -46,6 +47,13 @@ first asks the selected Python environment for CUDA (`gpu`), then retries the
 same video and red ROI on CPU if GPU initialization fails. Paddle model files
 must be installed/provisioned locally once; video frames and subtitles are not
 sent to an online OCR API by this bridge.
+
+In the main desktop workflow, choose **OCR phụ đề hiển thị trong video** in
+stage 01. KOVA downloads the source video, scans the selected normalised ROI
+(the lower subtitle band by default), saves `origin-language.srt` plus the
+source script, and waits for the user's edit/approval before translation. OCR
+does not require an STT Colab worker or an API Gateway key. It is appropriate
+only when the intended text is visible in the video; use STT for spoken audio.
 
 ## Translation and voice
 

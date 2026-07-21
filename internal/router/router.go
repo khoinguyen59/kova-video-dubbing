@@ -25,6 +25,7 @@ func SetupRouter(r *gin.Engine) {
 					"api_version": "v1",
 					"capabilities": []string{
 						"video-source",
+						"visual-subtitle-ocr",
 						"subtitle-translation",
 						"fixed-voice-dubbing",
 						"video-render",

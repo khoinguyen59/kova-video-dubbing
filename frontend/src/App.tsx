@@ -79,6 +79,7 @@ function sourceStepTitle(locale: Locale, id: string): string {
     download_video: { vi: 'Tải video nguồn', en: 'Download source video' },
     download_audio: { vi: 'Tải audio nguồn', en: 'Download source audio' },
     speech_to_text: { vi: 'Speech-to-text (tạo transcript)', en: 'Speech-to-text (create transcript)' },
+		visual_ocr: { vi: 'OCR khung hình (trích xuất phụ đề hiển thị)', en: 'Visual OCR (extract displayed captions)' },
     source_srt: { vi: 'Tạo SRT gốc để kiểm tra', en: 'Create source SRT for review' },
   }
   return titles[id]?.[locale] ?? id
@@ -140,6 +141,14 @@ export default function App() {
 	const [sttWorkerURL, setSTTWorkerURL] = useState('')
 	const [sttWorkerToken, setSTTWorkerToken] = useState('')
 	const [sttConnectionMessage, setSTTConnectionMessage] = useState('')
+	const [sourceMethod, setSourceMethod] = useState<'speech_to_text' | 'visual_ocr'>('speech_to_text')
+	const [ocrLanguage, setOCRLanguage] = useState('en')
+	const [ocrRegionX, setOCRRegionX] = useState('0.10')
+	const [ocrRegionY, setOCRRegionY] = useState('0.70')
+	const [ocrRegionWidth, setOCRRegionWidth] = useState('0.80')
+	const [ocrRegionHeight, setOCRRegionHeight] = useState('0.20')
+	const [ocrIntervalMS, setOCRIntervalMS] = useState('250')
+	const [ocrPreferGPU, setOCRPreferGPU] = useState(true)
   const [translationModels, setTranslationModels] = useState<TranslationModelOption[]>([])
   const [translationModelID, setTranslationModelID] = useState('oc/deepseek-v4-flash-free')
   const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([])
@@ -156,7 +165,8 @@ export default function App() {
 	const selectedTTS = ttsOptions.find((option) => option.id === ttsOptionID)
 	const selectedSTT = sttOptions.find((option) => option.id === sttOptionID)
 	const prerequisite = previousStage(activeStage)
-	const canStart = Boolean(snapshot && activeRun?.status !== 'running' && (!prerequisite || statuses[prerequisite] === 'approved') && (activeStage !== 'source' || (draft.trim() && (!selectedSTT?.needs_worker || (sttWorkerURL.trim() && sttWorkerToken.trim())))))
+	const sourceRequiresSTTWorker = sourceMethod === 'speech_to_text' && selectedSTT?.needs_worker
+	const canStart = Boolean(snapshot && activeRun?.status !== 'running' && (!prerequisite || statuses[prerequisite] === 'approved') && (activeStage !== 'source' || (draft.trim() && (!sourceRequiresSTTWorker || (sttWorkerURL.trim() && sttWorkerToken.trim())))))
 
   useEffect(() => {
     void (async () => {
@@ -272,6 +282,14 @@ export default function App() {
 		stt_option_id: sttOptionID,
 		stt_worker_url: sttWorkerURL,
 		stt_worker_token: sttWorkerToken,
+		source_method: sourceMethod,
+		ocr_language: ocrLanguage,
+		ocr_region_x: Number(ocrRegionX),
+		ocr_region_y: Number(ocrRegionY),
+		ocr_region_width: Number(ocrRegionWidth),
+		ocr_region_height: Number(ocrRegionHeight),
+		ocr_sample_interval_ms: Number(ocrIntervalMS),
+		ocr_prefer_gpu: ocrPreferGPU,
         translation_model_id: translationModelID,
         tts_option_id: ttsOptionID,
         voice_profile_id: voiceProfileID,
@@ -490,18 +508,27 @@ export default function App() {
               </div>
             )}
 			{activeStage === 'source' && <div className="worker-form source-stt-form">
-				<label>{locale === 'vi' ? 'Speech-to-text' : 'Speech-to-text'}<select value={sttOptionID} disabled={busy || activeRun?.status === 'running'} onChange={(event) => { setSTTOptionID(event.target.value); setSTTConnectionMessage('') }}>{sttOptions.map((option) => <option key={option.id} value={option.id}>{locale === 'vi' ? option.label_vi : option.label_en}</option>)}</select></label>
-				{selectedSTT?.needs_worker ? <>
-					<button className="secondary" disabled={busy || activeRun?.status === 'running'} onClick={() => void openColabNotebook(data.stt_colab_notebook_url)}>{locale === 'vi' ? 'Mở notebook STT trên Google Colab' : 'Open STT notebook in Google Colab'}</button>
-					<label>{locale === 'vi' ? 'URL worker STT Colab' : 'Colab STT worker URL'}<input placeholder="https://xxxx.trycloudflare.com" value={sttWorkerURL} onChange={(event) => setSTTWorkerURL(event.target.value)} /></label>
-					<label>{locale === 'vi' ? 'Token STT Colab' : 'Colab STT token'}<input type="password" autoComplete="off" placeholder={locale === 'vi' ? 'Dán KOVA_STT_TOKEN do notebook in ra' : 'Paste KOVA_STT_TOKEN printed by the notebook'} value={sttWorkerToken} onChange={(event) => setSTTWorkerToken(event.target.value)} /></label>
-					<button className="secondary" disabled={busy || !sttWorkerURL.trim() || !sttWorkerToken.trim()} onClick={() => void handleSTTConnectionCheck()}>{locale === 'vi' ? 'Kiểm tra kết nối STT' : 'Check STT connection'}</button>
-					<p className="worker-help">{locale === 'vi' ? 'Ấn mở notebook, chọn GPU trong Colab rồi Run all. Notebook in URL và token tạm thời; dán vào đây. Sau đó audio được gửi theo từng đoạn sang GPU Colab để tạo SRT, không dùng API Gateway hay phụ đề YouTube.' : 'Open the notebook, choose a GPU runtime in Colab, then Run all. Paste its temporary URL and token here. Audio is sent in timed segments to Colab GPU to create the SRT; no API Gateway or YouTube captions are used.'}</p>
-					{sttConnectionMessage && <p className="connection-message">{sttConnectionMessage}</p>}
-				</> : <p className="worker-help">{locale === 'vi' ? 'STT cục bộ dùng CPU/GPU của máy. Lần đầu KOVA tải engine và model đã chọn từ nguồn phát hành công khai.' : 'Local STT uses this computer’s CPU/GPU. On first use, KOVA downloads the engine and selected model from its public release.'}</p>}
+				<label>{locale === 'vi' ? 'Cách tạo script nguồn' : 'Source script method'}<select value={sourceMethod} disabled={busy || activeRun?.status === 'running'} onChange={(event) => { setSourceMethod(event.target.value as 'speech_to_text' | 'visual_ocr'); setSTTConnectionMessage('') }}><option value="speech_to_text">{locale === 'vi' ? 'Speech-to-text từ audio' : 'Speech-to-text from audio'}</option><option value="visual_ocr">{locale === 'vi' ? 'OCR phụ đề hiển thị trong video' : 'OCR visible captions in video'}</option></select></label>
+				{sourceMethod === 'speech_to_text' ? <>
+					<label>{locale === 'vi' ? 'Speech-to-text' : 'Speech-to-text'}<select value={sttOptionID} disabled={busy || activeRun?.status === 'running'} onChange={(event) => { setSTTOptionID(event.target.value); setSTTConnectionMessage('') }}>{sttOptions.map((option) => <option key={option.id} value={option.id}>{locale === 'vi' ? option.label_vi : option.label_en}</option>)}</select></label>
+					{selectedSTT?.needs_worker ? <>
+						<button className="secondary" disabled={busy || activeRun?.status === 'running'} onClick={() => void openColabNotebook(data.stt_colab_notebook_url)}>{locale === 'vi' ? 'Mở notebook STT trên Google Colab' : 'Open STT notebook in Google Colab'}</button>
+						<label>{locale === 'vi' ? 'URL worker STT Colab' : 'Colab STT worker URL'}<input placeholder="https://xxxx.trycloudflare.com" value={sttWorkerURL} onChange={(event) => setSTTWorkerURL(event.target.value)} /></label>
+						<label>{locale === 'vi' ? 'Token STT Colab' : 'Colab STT token'}<input type="password" autoComplete="off" placeholder={locale === 'vi' ? 'Dán KOVA_STT_TOKEN do notebook in ra' : 'Paste KOVA_STT_TOKEN printed by the notebook'} value={sttWorkerToken} onChange={(event) => setSTTWorkerToken(event.target.value)} /></label>
+						<button className="secondary" disabled={busy || !sttWorkerURL.trim() || !sttWorkerToken.trim()} onClick={() => void handleSTTConnectionCheck()}>{locale === 'vi' ? 'Kiểm tra kết nối STT' : 'Check STT connection'}</button>
+						<p className="worker-help">{locale === 'vi' ? 'Ấn mở notebook, chọn GPU trong Colab rồi Run all. Notebook in URL và token tạm thời; dán vào đây. Sau đó audio được gửi theo từng đoạn sang GPU Colab để tạo SRT, không dùng API Gateway hay phụ đề YouTube.' : 'Open the notebook, choose a GPU runtime in Colab, then Run all. Paste its temporary URL and token here. Audio is sent in timed segments to Colab GPU to create the SRT; no API Gateway or YouTube captions are used.'}</p>
+						{sttConnectionMessage && <p className="connection-message">{sttConnectionMessage}</p>}
+					</> : <p className="worker-help">{locale === 'vi' ? 'STT cục bộ dùng CPU/GPU của máy. Lần đầu KOVA tải engine và model đã chọn từ nguồn phát hành công khai.' : 'Local STT uses this computer’s CPU/GPU. On first use, KOVA downloads the engine and selected model from its public release.'}</p>}
+				</> : <>
+					<label>{locale === 'vi' ? 'Ngôn ngữ chữ trong video' : 'Visible-caption language'}<select value={ocrLanguage} onChange={(event) => setOCRLanguage(event.target.value)}><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="ch">中文</option><option value="japan">日本語</option><option value="korean">한국어</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="es">Español</option><option value="ru">Русский</option></select></label>
+					<div className="ocr-region-grid"><label>X<input type="number" min="0" max="1" step="0.01" value={ocrRegionX} onChange={(event) => setOCRRegionX(event.target.value)} /></label><label>Y<input type="number" min="0" max="1" step="0.01" value={ocrRegionY} onChange={(event) => setOCRRegionY(event.target.value)} /></label><label>{locale === 'vi' ? 'Rộng' : 'Width'}<input type="number" min="0.01" max="1" step="0.01" value={ocrRegionWidth} onChange={(event) => setOCRRegionWidth(event.target.value)} /></label><label>{locale === 'vi' ? 'Cao' : 'Height'}<input type="number" min="0.01" max="1" step="0.01" value={ocrRegionHeight} onChange={(event) => setOCRRegionHeight(event.target.value)} /></label></div>
+					<label>{locale === 'vi' ? 'Khoảng quét (ms)' : 'Sampling interval (ms)'}<input type="number" min="40" max="5000" step="10" value={ocrIntervalMS} onChange={(event) => setOCRIntervalMS(event.target.value)} /></label>
+					<label className="ocr-gpu-toggle"><input type="checkbox" checked={ocrPreferGPU} onChange={(event) => setOCRPreferGPU(event.target.checked)} />{locale === 'vi' ? 'Ưu tiên CUDA, tự chuyển CPU khi GPU không sẵn sàng' : 'Prefer CUDA and fall back to CPU if needed'}</label>
+					<p className="worker-help">{locale === 'vi' ? 'OCR chỉ đọc chữ/phụ đề đã hiển thị trong khung hình, không nghe audio và không cần Colab hoặc API Gateway. Cần Python có OpenCV, PaddlePaddle và PaddleOCR cục bộ. Vùng mặc định là dải phụ đề phía dưới: X 0.10, Y 0.70, Rộng 0.80, Cao 0.20.' : 'OCR reads only hardcoded text already visible in frames; it does not listen to audio and needs neither Colab nor an API gateway. It requires local Python with OpenCV, PaddlePaddle, and PaddleOCR. The default ROI is the lower subtitle band.'}</p>
+				</>}
 			</div>}
-            {activeStage === 'source' && activeRun?.status === 'running' && <p className="worker-help">{locale === 'vi' ? 'KOVA đang tải video/audio, sau đó chạy speech-to-text để tạo SRT gốc có timestamp. Không cần phụ đề YouTube.' : 'KOVA is downloading the video/audio, then running speech-to-text to create a timestamped source SRT. YouTube captions are not required.'}</p>}
-            {persistentStage(activeStage) && snapshot && (activeRun || activeStage === 'source') && <label className="draft-editor">{activeStage === 'source' ? (sourceSRTAvailable ? (locale === 'vi' ? 'SRT gốc từ speech-to-text — kiểm tra và sửa' : 'Source SRT from speech-to-text — review and edit') : (locale === 'vi' ? 'URL nguồn — sửa rồi chạy lại' : 'Source URL — edit and retry')) : activeStage === 'translation' ? (locale === 'vi' ? 'SRT tiếng Việt — kiểm tra và sửa' : 'Vietnamese SRT — review and edit') : t(locale, 'edit')}<textarea value={draft} placeholder={activeStage === 'source' ? (sourceSRTAvailable ? (locale === 'vi' ? 'Kiểm tra và sửa SRT gốc trước khi duyệt.' : 'Review and edit the source SRT before approval.') : (locale === 'vi' ? 'Dán URL video nguồn trước khi chạy.' : 'Paste the source video URL before starting.')) : t(locale, 'draftPlaceholder')} onChange={(event) => setDraft(event.target.value)} disabled={activeRun?.status === 'running' || activeRun?.status === 'approved'} /></label>}
+			{activeStage === 'source' && activeRun?.status === 'running' && <p className="worker-help">{sourceMethod === 'visual_ocr' ? (locale === 'vi' ? 'KOVA đang tải video/audio rồi quét vùng OCR để tạo SRT/script gốc có timestamp. Không chạy speech-to-text và không cần phụ đề YouTube.' : 'KOVA is downloading the source, then scanning the selected OCR region to create a timestamped source SRT/script. It does not run speech-to-text or require YouTube captions.') : (locale === 'vi' ? 'KOVA đang tải video/audio, sau đó chạy speech-to-text để tạo SRT gốc có timestamp. Không cần phụ đề YouTube.' : 'KOVA is downloading the video/audio, then running speech-to-text to create a timestamped source SRT. YouTube captions are not required.')}</p>}
+			{persistentStage(activeStage) && snapshot && (activeRun || activeStage === 'source') && <label className="draft-editor">{activeStage === 'source' ? (sourceSRTAvailable ? (locale === 'vi' ? 'SRT/script gốc — kiểm tra và sửa' : 'Source SRT/script — review and edit') : (locale === 'vi' ? 'URL nguồn — sửa rồi chạy lại' : 'Source URL — edit and retry')) : activeStage === 'translation' ? (locale === 'vi' ? 'SRT tiếng Việt — kiểm tra và sửa' : 'Vietnamese SRT — review and edit') : t(locale, 'edit')}<textarea value={draft} placeholder={activeStage === 'source' ? (sourceSRTAvailable ? (locale === 'vi' ? 'Kiểm tra và sửa SRT/script gốc trước khi duyệt.' : 'Review and edit the source SRT/script before approval.') : (locale === 'vi' ? 'Dán URL video nguồn trước khi chạy.' : 'Paste the source video URL before starting.')) : t(locale, 'draftPlaceholder')} onChange={(event) => setDraft(event.target.value)} disabled={activeRun?.status === 'running' || activeRun?.status === 'approved'} /></label>}
             {stageMessage && <p className="stage-message">{stageMessage}</p>}
             {message && <p className="error-message">{message}</p>}
           </section>

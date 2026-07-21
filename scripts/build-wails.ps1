@@ -72,6 +72,17 @@ try {
         Copy-Item -LiteralPath $sourceTool -Destination (Join-Path $portableBin $tool) -Force
     }
 
+    # Visual OCR is intentionally an external Python bridge, not a bundled
+    # Paddle runtime. Ship the small KOVA bridge next to the executable so a
+    # portable desktop build can use the user's configured Python environment.
+    $portableScripts = Join-Path $buildRoot "scripts"
+    New-Item -ItemType Directory -Force -Path $portableScripts | Out-Null
+    $ocrBridge = Join-Path $projectRoot "scripts\kova_visual_ocr.py"
+    if (-not (Test-Path -LiteralPath $ocrBridge)) {
+        throw "Missing required Visual OCR bridge: $ocrBridge"
+    }
+    Copy-Item -LiteralPath $ocrBridge -Destination (Join-Path $portableScripts "kova_visual_ocr.py") -Force
+
     # A successful build becomes the sole desktop-app executable in build/.
     Get-ChildItem -LiteralPath $buildRoot -File -Filter 'KOVA-Desktop-*.exe' |
         Remove-Item -Force

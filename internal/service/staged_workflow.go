@@ -16,6 +16,7 @@ import (
 	"kova/internal/service/dubbing"
 	"kova/internal/storage"
 	"kova/internal/types"
+	"kova/internal/visualocr"
 	"kova/log"
 	"kova/pkg/omnivoice"
 	"kova/pkg/util"
@@ -30,6 +31,11 @@ import (
 )
 
 const workflowStateFileName = "workflow_state.json"
+
+const (
+	sourceMethodSpeechToText = "speech_to_text"
+	sourceMethodVisualOCR    = "visual_ocr"
+)
 
 const (
 	workflowSourceRunning        = "source_running"
@@ -69,9 +75,14 @@ var (
 type subtitleWorkflow struct {
 	mu sync.Mutex
 
-	TaskID       string `json:"task_id"`
-	TaskBasePath string `json:"task_base_path"`
-	URL          string `json:"url"`
+	TaskID        string           `json:"task_id"`
+	TaskBasePath  string           `json:"task_base_path"`
+	URL           string           `json:"url"`
+	SourceMethod  string           `json:"source_method"`
+	OCRLanguage   string           `json:"ocr_language,omitempty"`
+	OCRRegion     visualocr.Region `json:"ocr_region,omitempty"`
+	OCRIntervalMS int              `json:"ocr_sample_interval_ms,omitempty"`
+	OCRPreferGPU  bool             `json:"ocr_prefer_gpu"`
 
 	OriginLanguage string   `json:"origin_language"`
 	TargetLanguage string   `json:"target_language"`
@@ -105,11 +116,38 @@ type subtitleWorkflow struct {
 }
 
 func initialSourceSteps() []dto.WorkflowProgressStep {
+	return initialSourceStepsFor(sourceMethodSpeechToText)
+}
+
+func initialSourceStepsFor(sourceMethod string) []dto.WorkflowProgressStep {
+	textStep := "speech_to_text"
+	if normalizeWorkflowSourceMethod(sourceMethod) == sourceMethodVisualOCR {
+		textStep = "visual_ocr"
+	}
 	return []dto.WorkflowProgressStep{
 		{ID: "download_video", State: "pending", Percent: 0},
 		{ID: "download_audio", State: "pending", Percent: 0},
-		{ID: "speech_to_text", State: "pending", Percent: 0},
+		{ID: textStep, State: "pending", Percent: 0},
 		{ID: "source_srt", State: "pending", Percent: 0},
+	}
+}
+
+func normalizeWorkflowSourceMethod(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), sourceMethodVisualOCR) {
+		return sourceMethodVisualOCR
+	}
+	return sourceMethodSpeechToText
+}
+
+func validateWorkflowSourceMethod(raw string) (string, error) {
+	method := strings.ToLower(strings.TrimSpace(raw))
+	switch method {
+	case "", sourceMethodSpeechToText:
+		return sourceMethodSpeechToText, nil
+	case sourceMethodVisualOCR:
+		return sourceMethodVisualOCR, nil
+	default:
+		return "", fmt.Errorf("source_method không hỗ trợ: %s", raw)
 	}
 }
 
@@ -132,7 +170,7 @@ func (w *subtitleWorkflow) updateSourceStep(id string, percent uint8, detail str
 	}
 	w.mu.Lock()
 	if len(w.SourceSteps) == 0 {
-		w.SourceSteps = initialSourceSteps()
+		w.SourceSteps = initialSourceStepsFor(w.SourceMethod)
 	}
 	for index := range w.SourceSteps {
 		if w.SourceSteps[index].ID != id {
@@ -159,7 +197,7 @@ func (w *subtitleWorkflow) failActiveSourceStep(detail string) {
 	}
 	w.mu.Lock()
 	if len(w.SourceSteps) == 0 {
-		w.SourceSteps = initialSourceSteps()
+		w.SourceSteps = initialSourceStepsFor(w.SourceMethod)
 	}
 	for index := range w.SourceSteps {
 		if w.SourceSteps[index].State == "running" {
@@ -175,14 +213,23 @@ func (w *subtitleWorkflow) failActiveSourceStep(detail string) {
 // were created before source_steps was persisted. This lets a user reopen an
 // older failed job and still see that the download succeeded before STT
 // failed, instead of seeing one misleading aggregate percentage.
-func sourceStepsForSnapshot(steps []dto.WorkflowProgressStep, stage, basePath, failure string) []dto.WorkflowProgressStep {
+func sourceStepsForSnapshot(steps []dto.WorkflowProgressStep, sourceMethod, stage, basePath, failure string) []dto.WorkflowProgressStep {
 	if len(steps) > 0 {
 		return cloneSourceSteps(steps)
 	}
 	if stage != workflowSourceRunning && stage != workflowAwaitSourceReview && stage != workflowFailed {
 		return nil
 	}
-	result := initialSourceSteps()
+	method := normalizeWorkflowSourceMethod(sourceMethod)
+	textStep := "speech_to_text"
+	textStepComplete := "Timed transcript created"
+	textStepRunning := "Preparing timed transcription"
+	if method == sourceMethodVisualOCR {
+		textStep = "visual_ocr"
+		textStepComplete = "Visible captions extracted with OCR"
+		textStepRunning = "Preparing visual subtitle OCR"
+	}
+	result := initialSourceStepsFor(method)
 	complete := func(id, detail string) {
 		for index := range result {
 			if result[index].ID == id {
@@ -212,7 +259,7 @@ func sourceStepsForSnapshot(steps []dto.WorkflowProgressStep, stage, basePath, f
 		complete("download_video", "Source video downloaded")
 	}
 	if hasSRT {
-		complete("speech_to_text", "Timed transcript created")
+		complete(textStep, textStepComplete)
 		complete("source_srt", "Review SRT ready")
 		return result
 	}
@@ -223,12 +270,12 @@ func sourceStepsForSnapshot(steps []dto.WorkflowProgressStep, stage, basePath, f
 		case !hasVideo:
 			set("download_video", "failed", failure)
 		default:
-			set("speech_to_text", "failed", failure)
+			set(textStep, "failed", failure)
 		}
 		return result
 	}
 	if hasAudio && hasVideo {
-		set("speech_to_text", "running", "Preparing timed transcription")
+		set(textStep, "running", textStepRunning)
 	} else if hasAudio {
 		set("download_video", "running", "Downloading source video")
 	} else {
@@ -418,11 +465,22 @@ func workflowTaskID(url string) string {
 }
 
 func createWorkflow(req dto.StartVideoSubtitleTaskReq) (*subtitleWorkflow, error) {
-	if !util.IsYouTubeURL(strings.TrimSpace(req.Url)) {
-		return nil, errors.New("quy trình kiểm tra từng bước hiện cần URL YouTube/youtu.be có phụ đề nền tảng")
+	sourceURL := strings.TrimSpace(req.Url)
+	if !util.IsYouTubeURL(sourceURL) && !strings.HasPrefix(sourceURL, "local:") {
+		return nil, errors.New("quy trình nguồn cần URL YouTube/youtu.be hoặc đường dẫn local:<video>")
 	}
-	if videoID, err := util.GetYouTubeID(req.Url); err != nil || strings.TrimSpace(videoID) == "" {
-		return nil, errors.New("URL YouTube không hợp lệ")
+	if util.IsYouTubeURL(sourceURL) {
+		if videoID, err := util.GetYouTubeID(sourceURL); err != nil || strings.TrimSpace(videoID) == "" {
+			return nil, errors.New("URL YouTube không hợp lệ")
+		}
+	}
+	sourceMethod, err := validateWorkflowSourceMethod(req.SourceMethod)
+	if err != nil {
+		return nil, err
+	}
+	ocrLanguage, ocrRegion, ocrInterval, ocrPreferGPU, err := normalizeWorkflowOCRRequest(req, sourceMethod)
+	if err != nil {
+		return nil, err
 	}
 	for range 8 {
 		taskID := workflowTaskID(req.Url)
@@ -438,7 +496,12 @@ func createWorkflow(req dto.StartVideoSubtitleTaskReq) (*subtitleWorkflow, error
 		workflow := &subtitleWorkflow{
 			TaskID:         taskID,
 			TaskBasePath:   basePath,
-			URL:            strings.TrimSpace(req.Url),
+			URL:            sourceURL,
+			SourceMethod:   sourceMethod,
+			OCRLanguage:    ocrLanguage,
+			OCRRegion:      ocrRegion,
+			OCRIntervalMS:  ocrInterval,
+			OCRPreferGPU:   ocrPreferGPU,
 			OriginLanguage: strings.TrimSpace(req.OriginLanguage),
 			TargetLanguage: strings.TrimSpace(req.TargetLang),
 			UserLanguage:   strings.TrimSpace(req.Language),
@@ -450,9 +513,9 @@ func createWorkflow(req dto.StartVideoSubtitleTaskReq) (*subtitleWorkflow, error
 			VerticalTitle:  req.VerticalMajorTitle,
 			VerticalSub:    req.VerticalMinorTitle,
 			CurrentStage:   workflowSourceRunning,
-			Message:        "Đang tải video/audio nguồn, sau đó chạy speech-to-text để tạo SRT gốc cho bạn kiểm tra.",
+			Message:        sourceWorkflowStartMessage(sourceMethod),
 			SourceRevision: 1,
-			SourceSteps:    initialSourceSteps(),
+			SourceSteps:    initialSourceStepsFor(sourceMethod),
 		}
 		if workflow.OriginLanguage == "" {
 			workflow.OriginLanguage = "en"
@@ -500,14 +563,20 @@ func (s Service) runWorkflowSource(workflow *subtitleWorkflow) {
 		s.failWorkflow(workflow, task, err)
 		return
 	}
-	if err := s.transcribeSourceForReview(context.Background(), workflow, task, step); err != nil {
-		s.failWorkflow(workflow, task, err)
+	var sourceErr error
+	if normalizeWorkflowSourceMethod(workflow.SourceMethod) == sourceMethodVisualOCR {
+		sourceErr = s.extractVisualOCRSourceForReview(context.Background(), workflow, task, step)
+	} else {
+		sourceErr = s.transcribeSourceForReview(context.Background(), workflow, task, step)
+	}
+	if sourceErr != nil {
+		s.failWorkflow(workflow, task, sourceErr)
 		return
 	}
 	task.ProcessPct = 35
 	workflow.mu.Lock()
 	workflow.CurrentStage = workflowAwaitSourceReview
-	workflow.Message = "Đã tạo video nguồn và phụ đề gốc. Hãy xem/sửa SRT rồi bấm Duyệt nguồn."
+	workflow.Message = sourceWorkflowReviewMessage(workflow.SourceMethod)
 	workflow.FailureReason = ""
 	workflow.mu.Unlock()
 	_ = persistWorkflow(workflow)
@@ -1357,7 +1426,8 @@ func workflowSnapshot(workflow *subtitleWorkflow) *dto.SubtitleWorkflowData {
 	dubbingAudioApproved := workflow.DubbingAudioApproved
 	dubbingVideoApproved := workflow.DubbingVideoApproved
 	failedStage := workflow.FailedStage
-	sourceSteps := sourceStepsForSnapshot(workflow.SourceSteps, stage, basePath, failure)
+	sourceMethod := workflow.SourceMethod
+	sourceSteps := sourceStepsForSnapshot(workflow.SourceSteps, sourceMethod, stage, basePath, failure)
 	translationWarnings := cloneTranslationWarnings(workflow.TranslationWarnings)
 	workflow.mu.Unlock()
 	task := workflow.task()

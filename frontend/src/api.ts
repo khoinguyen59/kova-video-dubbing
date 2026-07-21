@@ -24,6 +24,14 @@ export type WorkflowStageRequest = {
 	stt_option_id: string
 	stt_worker_url: string
 	stt_worker_token: string
+	source_method: 'speech_to_text' | 'visual_ocr'
+	ocr_language: string
+	ocr_region_x: number
+	ocr_region_y: number
+	ocr_region_width: number
+	ocr_region_height: number
+	ocr_sample_interval_ms: number
+	ocr_prefer_gpu: boolean
 	voice_profile_id: string
   worker_url: string
   worker_token: string

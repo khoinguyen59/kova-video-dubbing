@@ -8,7 +8,9 @@ Kova is a desktop-first video localization app for transcription, translation, f
 
 Năm bước nằm ở thanh điều hướng trái của desktop app:
 
-1. `Nguồn video / Video source` — file trên máy hoặc URL công khai.
+1. `Nguồn video / Video source` — file trên máy hoặc URL công khai; chọn
+   **Speech-to-text từ audio** hoặc **OCR phụ đề hiển thị trong video** để tạo
+   SRT/script gốc, rồi kiểm tra và duyệt trước khi dịch.
 2. `Dịch và phụ đề / Translation` — chọn ngôn ngữ, chế độ song ngữ và tên riêng.
 3. `Giọng lồng tiếng cố định / Fixed voice` — một engine/profile hoặc một audio clone cho toàn video.
 4. `Xuất hình và tinh chỉnh / Video output` — ngang, dọc, cả hai hoặc chỉ SRT/audio.
@@ -46,7 +48,12 @@ Năm bước nằm ở thanh điều hướng trái của desktop app:
 - Tab `06 · CapCut Auto-Builder & OCR` có bố cục desktop ba cột: nguồn/config ở trái, preview kéo logo/vẽ ROI ở giữa, style/OCR/review ở phải.
 - Kova luôn tạo `kova-capcut-draft-spec.json` để kiểm tra trước. File này lưu timeline ảnh/video, voiceover, BGM ngẫu nhiên + loop/ducking, motion, transition, logo, hai track subtitle độc lập và cấu hình style.
 - Muốn tạo Circle/Rectangle Blur Mask thật trong draft CapCut: chọn backend `pycapcut`, cài `pycapcut` vào Python đã cấu hình và chọn **CapCut Draft Root** trong `Cài đặt Kova`. Kova từ chối dùng `capcut-cli` cho project có mask để tránh tạo draft thiếu censor.
-- Visual OCR chạy khung hình video tại máy qua OpenCV/PaddleOCR: ưu tiên CUDA NVIDIA, rồi tự chạy lại cùng ROI trên CPU. Cần cài Paddle/PaddleOCR trong Python local một lần.
+- Visual OCR cũng là một lựa chọn trực tiếp trong **01 · Nguồn video**: nó
+  thay thế speech-to-text, quét vùng subtitle hardcode trong khung hình rồi
+  tạo SRT/script để bạn kiểm tra trước khi dịch. Nó không nghe audio, không
+  dùng Colab và không gửi khung hình đến API OCR. Cần cài Paddle/PaddleOCR và
+  OpenCV trong Python local một lần; KOVA ưu tiên CUDA NVIDIA rồi tự chạy lại
+  cùng ROI trên CPU khi GPU không sẵn sàng.
 - Live preview cho từng track phụ đề có màu, viền, nền alpha, bóng, căn lề, vị trí dọc và preset. Danh sách font lấy từ font families đã cài trên Windows; tên font được lưu vào Kova draft để kiểm tra/chỉnh tiếp trong CapCut nếu backend ngoài không map được font hệ thống đó.
 
 Xem thêm: [`docs/KOVA_DOCUMENTATION.md`](docs/KOVA_DOCUMENTATION.md).
@@ -76,8 +83,9 @@ nên có thể mở một cửa sổ trống hoặc báo lỗi build tag.
 .\scripts\build-wails.ps1 -WailsPath "C:\duong-dan\toi\wails.exe"
 ```
 
-Script đọc `VERSION` theo dạng `1.0.0.N`, tăng `N` sau khi build thành công và
-giữ duy nhất file `build\\KOVA-Desktop-1.0.0.(N+1).exe`. Wails sẽ tự tạo binding
+Script đọc `VERSION` theo dạng `A.B.C.D`: `D` tăng từ `0` đến `9`; sau `.9`,
+`C` tăng một đơn vị và `D` trở về `0` (ví dụ `1.0.1.9 → 1.0.2.0`). Script giữ
+duy nhất file `build\\KOVA-Desktop-<version>.exe`. Wails sẽ tự tạo binding
 trong `frontend/wailsjs` và tự build frontend trước khi nhúng vào `.exe`; hai
 thư mục đó là artefact build, không cần commit.
 

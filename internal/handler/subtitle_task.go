@@ -87,7 +87,9 @@ func (h Handler) GetSubtitleTask(c *gin.Context) {
 	})
 }
 
-// StartWorkflowSource starts only the source-download/speech-to-text stage.
+// StartWorkflowSource starts only the source-download/script-extraction stage.
+// The caller explicitly selects speech-to-text or Visual OCR; both stop at
+// the same editable source-SRT review gate.
 // It deliberately does not use StartSubtitleTask because that legacy endpoint
 // automatically continues into translation, TTS and rendering.
 func (h Handler) StartWorkflowSource(c *gin.Context) {

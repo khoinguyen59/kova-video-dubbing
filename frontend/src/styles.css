@@ -34,6 +34,10 @@ button:disabled { cursor: not-allowed; opacity: .46; }
 .source-step.failed .source-step-track i { background: #e06c78; }
 .source-step small { display: block; margin-top: 7px; color: #afc1dc; font-size: 11px; overflow-wrap: anywhere; }
 .source-stt-form { grid-template-columns: minmax(0, 1fr); }
+.ocr-region-grid { display: grid; grid-template-columns: repeat(4, minmax(72px, 1fr)); gap: 8px; }
+.ocr-region-grid label { min-width: 0; }
+.ocr-gpu-toggle { display: flex; align-items: center; gap: 8px; color: #cbd8ef; font-size: 13px; }
+.ocr-gpu-toggle input { width: auto; }
 
 .translation-warning-panel { margin-top: 16px; padding: 14px; border: 1px solid #92733a; border-radius: 10px; background: #2e2a1c; }
 .translation-warning-panel h2 { margin: 0; color: #ffe0a0; font-size: 15px; }

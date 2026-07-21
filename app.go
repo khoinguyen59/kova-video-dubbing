@@ -136,17 +136,25 @@ type DesktopProjectRequest struct {
 }
 
 type DesktopWorkflowStartRequest struct {
-	ProjectID          string `json:"project_id"`
-	Stage              string `json:"stage"`
-	SourceURL          string `json:"source_url"`
-	STTOptionID        string `json:"stt_option_id"`
-	STTWorkerURL       string `json:"stt_worker_url"`
-	STTWorkerToken     string `json:"stt_worker_token"`
-	TranslationModelID string `json:"translation_model_id"`
-	TTSOptionID        string `json:"tts_option_id"`
-	VoiceProfileID     string `json:"voice_profile_id"`
-	WorkerURL          string `json:"worker_url"`
-	WorkerToken        string `json:"worker_token"`
+	ProjectID           string  `json:"project_id"`
+	Stage               string  `json:"stage"`
+	SourceURL           string  `json:"source_url"`
+	STTOptionID         string  `json:"stt_option_id"`
+	STTWorkerURL        string  `json:"stt_worker_url"`
+	STTWorkerToken      string  `json:"stt_worker_token"`
+	SourceMethod        string  `json:"source_method"`
+	OCRLanguage         string  `json:"ocr_language"`
+	OCRRegionX          float64 `json:"ocr_region_x"`
+	OCRRegionY          float64 `json:"ocr_region_y"`
+	OCRRegionWidth      float64 `json:"ocr_region_width"`
+	OCRRegionHeight     float64 `json:"ocr_region_height"`
+	OCRSampleIntervalMS int     `json:"ocr_sample_interval_ms"`
+	OCRPreferGPU        bool    `json:"ocr_prefer_gpu"`
+	TranslationModelID  string  `json:"translation_model_id"`
+	TTSOptionID         string  `json:"tts_option_id"`
+	VoiceProfileID      string  `json:"voice_profile_id"`
+	WorkerURL           string  `json:"worker_url"`
+	WorkerToken         string  `json:"worker_token"`
 }
 
 type DesktopWorkflowAction struct {
@@ -414,9 +422,17 @@ func (a *App) StartDesktopWorkflowStage(request DesktopWorkflowStartRequest) (De
 		}
 	}
 	if request.Stage == string(project.StageSource) {
-		if err := configureDesktopSTT(request.STTOptionID, request.STTWorkerURL, request.STTWorkerToken); err != nil {
+		sourceMethod, err := normalizeDesktopSourceMethod(request.SourceMethod)
+		if err != nil {
 			_, _ = store.FailStage(context.Background(), run.ID, workflowFailureDetail(err))
 			return action, err
+		}
+		request.SourceMethod = sourceMethod
+		if sourceMethod == "speech_to_text" {
+			if err := configureDesktopSTT(request.STTOptionID, request.STTWorkerURL, request.STTWorkerToken); err != nil {
+				_, _ = store.FailStage(context.Background(), run.ID, workflowFailureDetail(err))
+				return action, err
+			}
 		}
 	}
 	workflowTaskID, startErr := a.startLegacyWorkflowStage(snapshot.Project, request)
@@ -456,6 +472,14 @@ func (a *App) startLegacyWorkflowStage(desktopProject project.Project, request D
 			"embed_subtitle_video_type":     "horizontal",
 			"origin_language_word_one_line": 12,
 			"vtt_switch":                    false,
+			"source_method":                 request.SourceMethod,
+			"ocr_language":                  request.OCRLanguage,
+			"ocr_region_x":                  request.OCRRegionX,
+			"ocr_region_y":                  request.OCRRegionY,
+			"ocr_region_width":              request.OCRRegionWidth,
+			"ocr_region_height":             request.OCRRegionHeight,
+			"ocr_sample_interval_ms":        request.OCRSampleIntervalMS,
+			"ocr_prefer_gpu":                request.OCRPreferGPU,
 		})
 		if err != nil {
 			return "", err
@@ -981,6 +1005,17 @@ var desktopSTTOptions = []STTOption{
 
 func (a *App) ListSTTOptions() []STTOption {
 	return append([]STTOption(nil), desktopSTTOptions...)
+}
+
+func normalizeDesktopSourceMethod(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "speech_to_text":
+		return "speech_to_text", nil
+	case "visual_ocr":
+		return "visual_ocr", nil
+	default:
+		return "", fmt.Errorf("phương thức tạo script không hợp lệ: %s", raw)
+	}
 }
 
 func configureDesktopSTT(optionID, workerURL, workerToken string) error {

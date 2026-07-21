@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"kova/internal/dto"
 	"kova/internal/service/dubbing"
 	"kova/internal/storage"
 	"kova/internal/types"
@@ -262,6 +263,46 @@ func TestWorkflowSnapshotKeepsSeparateSourcePhases(t *testing.T) {
 		if step.ID == "speech_to_text" && step.State != "failed" {
 			t.Fatalf("STT phase after failure = %q, want failed", step.State)
 		}
+	}
+}
+
+func TestVisualOCRSourceModeReplacesTheSTTProgressPhase(t *testing.T) {
+	workflow := seedWorkflowForTest(t, workflowSourceRunning)
+	workflow.SourceMethod = sourceMethodVisualOCR
+	workflow.SourceSteps = initialSourceStepsFor(workflow.SourceMethod)
+	workflow.updateSourceStep("download_video", 100, "video ready")
+	workflow.updateSourceStep("visual_ocr", 45, "frame scan in progress")
+
+	state := workflowSnapshot(workflow)
+	byID := map[string]dto.WorkflowProgressStep{}
+	for _, step := range state.SourceSteps {
+		byID[step.ID] = step
+	}
+	if _, found := byID["speech_to_text"]; found {
+		t.Fatalf("OCR source state exposed an STT phase: %#v", state.SourceSteps)
+	}
+	if got, found := byID["visual_ocr"]; !found || got.State != "running" || got.Percent != 45 {
+		t.Fatalf("visual_ocr phase = %#v, want running 45", got)
+	}
+}
+
+func TestVisualOCRRequestUsesDefaultsAndRejectsAnInvalidRegion(t *testing.T) {
+	language, region, interval, _, err := normalizeWorkflowOCRRequest(dto.StartVideoSubtitleTaskReq{SourceMethod: sourceMethodVisualOCR}, sourceMethodVisualOCR)
+	if err != nil {
+		t.Fatalf("normalizeWorkflowOCRRequest(default) error = %v", err)
+	}
+	if language != "en" || region.X != 0.10 || region.Y != 0.70 || region.Width != 0.80 || region.Height != 0.20 || interval < 40 {
+		t.Fatalf("OCR defaults = language %q region %#v interval %d", language, region, interval)
+	}
+	_, _, _, _, err = normalizeWorkflowOCRRequest(dto.StartVideoSubtitleTaskReq{
+		SourceMethod:    sourceMethodVisualOCR,
+		OCRRegionX:      0.80,
+		OCRRegionY:      0.70,
+		OCRRegionWidth:  0.30,
+		OCRRegionHeight: 0.20,
+	}, sourceMethodVisualOCR)
+	if err == nil {
+		t.Fatal("normalizeWorkflowOCRRequest accepted an out-of-frame OCR region")
 	}
 }
 
