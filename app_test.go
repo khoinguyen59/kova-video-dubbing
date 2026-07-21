@@ -127,6 +127,32 @@ func TestTTSOptionsIncludeDropdownGooglePreset(t *testing.T) {
 	t.Fatalf("ListTTSOptions() = %+v, want Google Gateway preset", options)
 }
 
+func TestConfigureDesktopTTSReplacesOmniVoiceWithGoogleGatewayAndReusesSessionKey(t *testing.T) {
+	original := config.Conf
+	t.Cleanup(func() { config.Conf = original })
+
+	config.Conf.Tts.Provider = "omnivoice"
+	config.Conf.Tts.Gateway.Endpoint = "https://gateway.example/v1/audio/speech"
+	config.Conf.Tts.Gateway.ApiKey = ""
+	config.Conf.Tts.Gateway.ApiKeyEnv = ""
+	config.Conf.Tts.Gateway.SessionAPIKey = ""
+	config.Conf.Llm.SessionApiKey = "gateway-session-key"
+
+	payload, err := NewApp().configureDesktopTTS(DesktopWorkflowStartRequest{TTSOptionID: "gateway-google-vi"})
+	if err != nil {
+		t.Fatalf("configureDesktopTTS() error = %v", err)
+	}
+	if config.Conf.Tts.Provider != "gateway" || config.Conf.Tts.Gateway.Model != "google-tts/vi" {
+		t.Fatalf("gateway selection was not applied: %+v", config.Conf.Tts)
+	}
+	if config.Conf.Tts.Gateway.SessionAPIKey != "gateway-session-key" {
+		t.Fatal("existing KOVA Gateway session key was not made available to TTS")
+	}
+	if string(payload) != `{"tts_voice_code":"auto"}` {
+		t.Fatalf("gateway payload = %s, want clone-free auto voice", payload)
+	}
+}
+
 func TestTranslationModelDropdownContainsOnlyApprovedFreeGatewayModels(t *testing.T) {
 	options := NewApp().ListTranslationModels()
 	if len(options) != 6 {

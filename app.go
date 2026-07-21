@@ -540,6 +540,15 @@ func (a *App) configureDesktopTTS(request DesktopWorkflowStartRequest) ([]byte, 
 	config.Conf.Tts.Provider = selected.Provider
 	if selected.Provider == "gateway" {
 		config.Conf.Tts.Gateway.Model = selected.Model
+		// The standard KOVA Gateway uses one bearer credential for text, STT
+		// and TTS. Reuse an already-entered session key only when the user has
+		// not configured a dedicated TTS key; it remains memory-only.
+		if strings.TrimSpace(config.ResolveGatewayTTSAPIKey()) == "" {
+			config.Conf.Tts.Gateway.SessionAPIKey = config.ResolveLLMAPIKey()
+		}
+		if strings.TrimSpace(config.ResolveGatewayTTSAPIKey()) == "" {
+			return nil, errors.New("Google/Edge Gateway TTS cần API key; nhập key Gateway trong Cài đặt trước khi bắt đầu")
+		}
 		return json.Marshal(map[string]any{"tts_voice_code": "auto"})
 	}
 	if !selected.NeedsWorker || !selected.NeedsProfile {

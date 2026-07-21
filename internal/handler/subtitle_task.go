@@ -161,7 +161,12 @@ func (h Handler) StartWorkflowDubbingAudio(c *gin.Context) {
 		workflowError(c, fmt.Errorf("cấu hình lồng tiếng không hợp lệ: %w", err))
 		return
 	}
-	data, err := h.currentWorkflowService().StartWorkflowDubbingAudio(c.Param("taskId"), req)
+	svc := h.currentWorkflowService()
+	// Explicitly refresh at the HTTP boundary as well. The service also has a
+	// defensive refresh, but doing it here makes the selected dropdown apply
+	// before any workflow state is inspected.
+	svc.RefreshTTSClient()
+	data, err := svc.StartWorkflowDubbingAudio(c.Param("taskId"), req)
 	workflowResponse(c, data, err)
 }
 

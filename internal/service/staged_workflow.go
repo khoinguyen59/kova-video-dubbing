@@ -770,6 +770,14 @@ func (s Service) StartWorkflowDubbing(taskID string, req dto.StartWorkflowDubbin
 // StartWorkflowDubbingAudio starts only speech synthesis. It never muxes a
 // video: the user must approve the produced audio before video assembly.
 func (s Service) StartWorkflowDubbingAudio(taskID string, req dto.StartWorkflowDubbingReq) (*dto.SubtitleWorkflowData, error) {
+	// The desktop TTS selector mutates the session configuration immediately
+	// before this request. Rebuild the captured client here, before changing
+	// workflow state or starting a goroutine, so Google TTS can never inherit a
+	// stale OmniVoice client from an earlier run.
+	s.RefreshTTSClient()
+	if err := s.ValidateTTSPreflight(); err != nil {
+		return nil, err
+	}
 	workflow, err := loadWorkflow(taskID)
 	if err != nil {
 		return nil, err

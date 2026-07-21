@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"kova/config"
 	"kova/internal/types"
 	"kova/log"
@@ -15,6 +16,7 @@ import (
 	"kova/pkg/whisper"
 	"kova/pkg/whispercpp"
 	"kova/pkg/whisperkit"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -55,17 +57,36 @@ func NewService() *Service {
 
 	chatCompleter = newChatCompleter()
 
-	switch config.Conf.Tts.Provider {
+	ttsClient = newTTSClient()
+
+	s := &Service{
+		Transcriber:      transcriber,
+		ChatCompleter:    chatCompleter,
+		TtsClient:        ttsClient,
+		OssClient:        aliyun.NewOssClient(config.Conf.Transcribe.Aliyun.Oss.AccessKeyId, config.Conf.Transcribe.Aliyun.Oss.AccessKeySecret, config.Conf.Transcribe.Aliyun.Oss.Bucket),
+		VoiceCloneClient: aliyun.NewVoiceCloneClient(config.Conf.Tts.Aliyun.Speech.AccessKeyId, config.Conf.Tts.Aliyun.Speech.AccessKeySecret, config.Conf.Tts.Aliyun.Speech.AppKey),
+		ImageClient:      pkgimage.NewOpenAICompatibleClient(config.Conf.Image.Openai.BaseUrl, config.Conf.Image.Openai.ApiKey, config.Conf.Image.Openai.Model),
+	}
+	s.YouTubeSubtitleSrv = NewYouTubeSubtitleService()
+
+	return s
+}
+
+// newTTSClient creates the client for the provider that is selected now.
+// The desktop may switch its dropdown after the local API server started, so
+// this must not be called only during application boot.
+func newTTSClient() types.Ttser {
+	switch strings.ToLower(strings.TrimSpace(config.Conf.Tts.Provider)) {
 	case "openai":
-		ttsClient = openai.NewClient(config.Conf.Tts.Openai.BaseUrl, config.Conf.Tts.Openai.ApiKey, config.Conf.App.Proxy)
+		return openai.NewClient(config.Conf.Tts.Openai.BaseUrl, config.Conf.Tts.Openai.ApiKey, config.Conf.App.Proxy)
 	case "aliyun":
-		ttsClient = aliyun.NewTtsClient(config.Conf.Tts.Aliyun.Speech.AccessKeyId, config.Conf.Tts.Aliyun.Speech.AccessKeySecret, config.Conf.Tts.Aliyun.Speech.AppKey)
+		return aliyun.NewTtsClient(config.Conf.Tts.Aliyun.Speech.AccessKeyId, config.Conf.Tts.Aliyun.Speech.AccessKeySecret, config.Conf.Tts.Aliyun.Speech.AppKey)
 	case "edge-tts":
-		ttsClient = localtts.NewEdgeTtsClient()
+		return localtts.NewEdgeTtsClient()
 	case "minimax":
-		ttsClient = minimax.NewTtsClient(config.Conf.Tts.Minimax.BaseUrl, config.Conf.Tts.Minimax.ApiKey, config.Conf.Tts.Minimax.Model)
+		return minimax.NewTtsClient(config.Conf.Tts.Minimax.BaseUrl, config.Conf.Tts.Minimax.ApiKey, config.Conf.Tts.Minimax.Model)
 	case "omnivoice":
-		ttsClient = omnivoice.NewClient(omnivoice.Config{
+		return omnivoice.NewClient(omnivoice.Config{
 			BaseURL:  config.Conf.Tts.Omnivoice.BaseUrl,
 			APIKey:   config.Conf.Tts.Omnivoice.SessionApiKey,
 			Language: config.Conf.Tts.Omnivoice.Language,
@@ -81,25 +102,14 @@ func NewService() *Service {
 			ConsentConfirmed: false,
 		})
 	case "gateway":
-		ttsClient = gatewaytts.NewClient(
+		return gatewaytts.NewClient(
 			config.Conf.Tts.Gateway.Endpoint,
 			config.ResolveGatewayTTSAPIKey(),
 			config.Conf.Tts.Gateway.Model,
 			config.Conf.Tts.Gateway.ResponseFormat,
 		)
 	}
-
-	s := &Service{
-		Transcriber:      transcriber,
-		ChatCompleter:    chatCompleter,
-		TtsClient:        ttsClient,
-		OssClient:        aliyun.NewOssClient(config.Conf.Transcribe.Aliyun.Oss.AccessKeyId, config.Conf.Transcribe.Aliyun.Oss.AccessKeySecret, config.Conf.Transcribe.Aliyun.Oss.Bucket),
-		VoiceCloneClient: aliyun.NewVoiceCloneClient(config.Conf.Tts.Aliyun.Speech.AccessKeyId, config.Conf.Tts.Aliyun.Speech.AccessKeySecret, config.Conf.Tts.Aliyun.Speech.AppKey),
-		ImageClient:      pkgimage.NewOpenAICompatibleClient(config.Conf.Image.Openai.BaseUrl, config.Conf.Image.Openai.ApiKey, config.Conf.Image.Openai.Model),
-	}
-	s.YouTubeSubtitleSrv = NewYouTubeSubtitleService()
-
-	return s
+	return nil
 }
 
 // RefreshTranscriptionClient rebuilds only the STT client immediately before
@@ -145,4 +155,52 @@ func (s *Service) RefreshTranslationClients() {
 	}
 	s.ChatCompleter = newChatCompleter()
 	s.YouTubeSubtitleSrv = NewYouTubeSubtitleService()
+}
+
+// RefreshTTSClient rebuilds the provider captured by a running local API.
+// In particular, selecting Google/Edge Gateway TTS must replace a stale
+// OmniVoice client before a single cue is synthesized.  This is deliberately
+// separate from the translator refresh: changing a TTS dropdown never
+// restarts download, STT, or translation work.
+func (s *Service) RefreshTTSClient() {
+	if s == nil {
+		return
+	}
+	s.TtsClient = newTTSClient()
+}
+
+// ValidateTTSPreflight fails synchronously before a dubbing worker is
+// started. It catches an outdated in-memory provider and missing Gateway
+// settings without wasting time preparing or synthesizing subtitles.
+func (s *Service) ValidateTTSPreflight() error {
+	if s == nil {
+		return fmt.Errorf("KOVA TTS service is unavailable")
+	}
+	provider := strings.ToLower(strings.TrimSpace(config.Conf.Tts.Provider))
+	switch provider {
+	case "gateway":
+		if strings.TrimSpace(config.Conf.Tts.Gateway.Endpoint) == "" {
+			return fmt.Errorf("Google/Edge Gateway TTS thiếu endpoint")
+		}
+		if strings.TrimSpace(config.ResolveGatewayTTSAPIKey()) == "" {
+			return fmt.Errorf("Google/Edge Gateway TTS thiếu API key; nhập key Gateway trong Cài đặt hoặc dùng key phiên hiện tại")
+		}
+		if strings.TrimSpace(config.Conf.Tts.Gateway.Model) == "" {
+			return fmt.Errorf("Google/Edge Gateway TTS thiếu model")
+		}
+		if _, ok := s.TtsClient.(*gatewaytts.Client); !ok {
+			return fmt.Errorf("KOVA chưa áp dụng Google/Edge Gateway TTS cho worker; hãy chạy lại bước lồng tiếng")
+		}
+	case "omnivoice":
+		if _, ok := s.TtsClient.(*omnivoice.Client); !ok {
+			return fmt.Errorf("KOVA chưa áp dụng OmniVoice cho worker; hãy chạy lại bước lồng tiếng")
+		}
+	case "openai", "aliyun", "edge-tts", "minimax":
+		if s.TtsClient == nil {
+			return fmt.Errorf("KOVA không thể khởi tạo TTS provider %q", provider)
+		}
+	default:
+		return fmt.Errorf("KOVA không hỗ trợ TTS provider %q", provider)
+	}
+	return nil
 }
