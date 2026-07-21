@@ -570,6 +570,10 @@ func hasVietnameseASCIISyllableContext(text, token string) bool {
 		return strings.Contains(lower, "lý do") || strings.Contains(lower, "do đó") || strings.Contains(lower, "do vì")
 	case "so":
 		return strings.Contains(lower, "so sánh") || strings.Contains(lower, "so với")
+	case "can":
+		// "can đảm" is an ordinary Vietnamese phrase. Do not mistake its
+		// unaccented syllable for the English auxiliary verb "can".
+		return strings.Contains(lower, "can đảm")
 	default:
 		return false
 	}
@@ -679,8 +683,9 @@ var vietnameseLatinLoanwords = map[string]struct{}{
 // vietnameseAmbiguousASCIISyllables must be handled in Vietnamese context,
 // rather than treated as generic English or as unconditional loanwords.
 var vietnameseAmbiguousASCIISyllables = map[string]struct{}{
-	"do": {}, // lý do, do đó
-	"so": {}, // so sánh, so với
+	"do":  {}, // lý do, do đó
+	"so":  {}, // so sánh, so với
+	"can": {}, // can đảm
 }
 
 // ordinaryEnglishWords is deliberately a high-signal set: it catches genuine

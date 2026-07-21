@@ -19,7 +19,9 @@ func TestNeedsVietnameseReview(t *testing.T) {
 		{"reported Vietnamese cue with video", "Trong video này, tôi sẽ chia sẻ với bạn kỹ thuật mà tôi dùng để cải thiện kỹ năng nghe.", "Trong video này, tôi sẽ chia sẻ với bạn kỹ thuật mà tôi dùng để cải thiện kỹ năng nghe.", false},
 		{"reported Vietnamese cue with ordinary ASCII syllables", "First, let's talk about why most people fail to improve their listening.", "Đầu tiên, hãy nói về lý do tại sao hầu hết mọi người không cải thiện khả năng lắng nghe.", false},
 		{"reported Vietnamese cue with so-sánh", "Let's compare this technique with watching movies.", "Hãy so sánh kỹ thuật này với việc xem phim.", false},
+		{"reported Vietnamese cue with can đảm", "We must be brave and persevere.", "Chúng ta cũng phải phát triển sức mạnh nội tâm của chính mình, có can đảm để kiên trì vượt qua những", false},
 		{"ambiguous English do remains outside Vietnamese context", "Do it now.", "Hãy do ngay.", true},
+		{"ambiguous English can remains outside Vietnamese context", "Can you continue?", "Bạn can tiếp tục không?", true},
 		{"ambiguous English so remains outside Vietnamese context", "So, let's begin.", "So, hãy bắt đầu.", true},
 		{"ASCII loanword video in Vietnamese candidate", "Watch this video", "Hãy xem video này", false},
 		{"English residue alongside video", "Watch this video", "Hãy watch video này", true},
@@ -59,6 +61,20 @@ func TestEnforceTargetLanguagePreservesVietnameseVTTWithVideo(t *testing.T) {
 	translator := &Translator{}
 	cue := "Trong video này, tôi sẽ chia sẻ với bạn kỹ thuật mà tôi sử dụng để cải thiện kỹ năng nghe."
 	got, err := translator.enforceTargetLanguage(cue, cue, types.LanguageNameEnglish, types.LanguageNameVietnamese)
+	if err != nil {
+		t.Fatalf("enforceTargetLanguage() error = %v", err)
+	}
+	if got != cue {
+		t.Fatalf("enforceTargetLanguage() = %q, want %q", got, cue)
+	}
+}
+
+func TestEnforceTargetLanguagePreservesVietnameseCanDamPhrase(t *testing.T) {
+	// Regression for the exact quality-gate failure reported by the desktop:
+	// “can” in “can đảm” is Vietnamese, not the English modal verb.
+	translator := &Translator{}
+	cue := "Chúng ta cũng phải phát triển sức mạnh nội tâm của chính mình, có can đảm để kiên trì vượt qua những"
+	got, err := translator.enforceTargetLanguage("We must be brave and persevere.", cue, types.LanguageNameEnglish, types.LanguageNameVietnamese)
 	if err != nil {
 		t.Fatalf("enforceTargetLanguage() error = %v", err)
 	}
