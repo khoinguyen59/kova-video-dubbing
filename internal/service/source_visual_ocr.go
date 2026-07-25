@@ -10,9 +10,9 @@ import (
 	"kova/internal/types"
 	"kova/internal/visualocr"
 	"kova/pkg/util"
-	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const visualOCRMergeGapMS = 450
@@ -159,27 +159,63 @@ func (s Service) extractVisualOCRSourceForReview(ctx context.Context, workflow *
 // replaces a timed STT cue when their intervals overlap, preserving STT as
 // the timing backbone and avoiding duplicate or out-of-order subtitle cues.
 func (s Service) extractCombinedSourceForReview(ctx context.Context, workflow *subtitleWorkflow, task *types.SubtitleTask, step *types.SubtitleTaskStepParam) error {
-	if err := s.transcribeSourceForReview(ctx, workflow, task, step); err != nil {
-		return err
-	}
-	// The STT helper writes a temporary review SRT as part of its standalone
-	// contract. For the combined mode it is not final until OCR has finished.
-	reportSourceProgress(step, "source_srt", 0, "STT transcript ready; scanning OCR before creating the combined review SRT")
 	canonical := filepath.Join(step.TaskBasePath, types.SubtitleTaskOriginLanguageSrtFileName)
 	sttPath := filepath.Join(step.TaskBasePath, "origin_language_stt.srt")
-	if data, err := os.ReadFile(canonical); err != nil {
-		return fmt.Errorf("không thể lưu bản STT riêng: %w", err)
-	} else if err := os.WriteFile(sttPath, data, 0644); err != nil {
-		return fmt.Errorf("không thể ghi artifact STT: %w", err)
-	}
 	ocrPath := filepath.Join(step.TaskBasePath, "origin_language_ocr.srt")
-	if err := s.extractVisualOCRSourceForReview(ctx, workflow, task, step, ocrPath); err != nil {
-		return err
+
+	// STT (including its audio-separation prerequisite) and OCR use different
+	// Colab workers and different input files. Run them at the same time. Each
+	// branch owns a copy of the mutable task parameters so the race detector
+	// and the UI see independent, deterministic progress.
+	sttStep, ocrStep := *step, *step
+	sttTask, ocrTask := *task, *task
+	sttStep.TaskPtr = &sttTask
+	ocrStep.TaskPtr = &ocrTask
+
+	sttErr, ocrErr := runParallelSourceExtractors(func() error {
+		if err := s.separateSourceAudioForSTT(ctx, &sttStep); err != nil {
+			return err
+		}
+		return s.transcribeSourceForReview(ctx, workflow, &sttTask, &sttStep, sttPath)
+	}, func() error {
+		return s.extractVisualOCRSourceForReview(ctx, workflow, &ocrTask, &ocrStep, ocrPath)
+	})
+
+	if sttErr != nil {
+		detail := "Nhánh STT không hoàn tất: " + sttErr.Error()
+		workflow.failTranslationStep("separate_audio", detail)
+		workflow.failTranslationStep("speech_to_text", detail)
+		workflow.addSourceWarning(detail)
 	}
-	reportSourceProgress(step, "source_srt", 0, "Combining aligned STT and OCR text")
-	replaced, blocks, err := combineSTTAndOCRSourceSRT(sttPath, ocrPath)
+	if ocrErr != nil {
+		detail := "Nhánh OCR không hoàn tất: " + ocrErr.Error()
+		workflow.failTranslationStep("visual_ocr", detail)
+		workflow.addSourceWarning(detail)
+	}
+	if sttErr != nil && ocrErr != nil {
+		return fmt.Errorf("cả hai worker tạo script đều thất bại; STT: %v; OCR: %v", sttErr, ocrErr)
+	}
+
+	reportSourceProgress(step, "source_srt", 0, "Creating the canonical review SRT from completed extractor branches")
+	var (
+		blocks   []*util.SrtBlock
+		replaced int
+		err      error
+		detail   string
+	)
+	switch {
+	case sttErr == nil && ocrErr == nil:
+		replaced, blocks, err = combineSTTAndOCRSourceSRT(sttPath, ocrPath)
+		detail = fmt.Sprintf("Hybrid review SRT ready; OCR corrected %d aligned STT cue(s)", replaced)
+	case sttErr == nil:
+		blocks, err = workflowSRTBlocks(sttPath)
+		detail = "STT review SRT ready; OCR warning is shown separately"
+	default:
+		blocks, err = workflowSRTBlocks(ocrPath)
+		detail = "OCR review SRT ready; STT warning is shown separately"
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("không thể đọc artifact tạo script đã hoàn tất: %w", err)
 	}
 	if err := writeSourceSRT(canonical, blocks); err != nil {
 		return err
@@ -187,9 +223,38 @@ func (s Service) extractCombinedSourceForReview(ctx context.Context, workflow *s
 	if err := writeWorkflowText(filepath.Join(step.TaskBasePath, "output", types.SubtitleTaskOriginLanguageTextFileName), blocks, false); err != nil {
 		return err
 	}
-	reportSourceProgress(step, "source_srt", 100, fmt.Sprintf("Hybrid review SRT ready; OCR corrected %d aligned STT cue(s)", replaced))
+	reportSourceProgress(step, "source_srt", 100, detail)
+	originLanguage := strings.TrimSpace(string(sttStep.OriginLanguage))
+	if sttErr != nil || originLanguage == "" || strings.EqualFold(originLanguage, "auto") {
+		originLanguage = strings.TrimSpace(string(ocrStep.OriginLanguage))
+	}
+	workflow.mu.Lock()
+	if originLanguage != "" && !strings.EqualFold(originLanguage, "auto") {
+		workflow.OriginLanguage = originLanguage
+	} else {
+		originLanguage = workflow.OriginLanguage
+	}
+	workflow.mu.Unlock()
+	step.OriginLanguage = types.StandardLanguageCode(originLanguage)
+	task.OriginLanguage = originLanguage
 	task.ProcessPct = 33
 	return nil
+}
+
+func runParallelSourceExtractors(stt, ocr func() error) (error, error) {
+	var sttErr, ocrErr error
+	var branches sync.WaitGroup
+	branches.Add(2)
+	go func() {
+		defer branches.Done()
+		sttErr = stt()
+	}()
+	go func() {
+		defer branches.Done()
+		ocrErr = ocr()
+	}()
+	branches.Wait()
+	return sttErr, ocrErr
 }
 
 func normalizeVisualOCRLanguage(value string) string {

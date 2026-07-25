@@ -168,7 +168,10 @@ func initialSourceSteps() []dto.WorkflowProgressStep {
 }
 
 func initialTranslationStepsFor(sourceMethod string) []dto.WorkflowProgressStep {
-	steps := []dto.WorkflowProgressStep{{ID: "script_prepare", State: "pending", Percent: 0}}
+	// Download progress belongs exclusively to stage 01. Stage 02 begins with
+	// the selected script extractors and never presents a second, ambiguous
+	// "prepare video" row after the source video is already approved.
+	steps := make([]dto.WorkflowProgressStep, 0, 7)
 	switch normalizeWorkflowSourceMethod(sourceMethod) {
 	case sourceMethodVisualOCR:
 		steps = append(steps, dto.WorkflowProgressStep{ID: "visual_ocr", State: "pending", Percent: 0})
@@ -405,6 +408,42 @@ func (w *subtitleWorkflow) finishTranslationProgress(detail string) {
 	w.TranslationEstimatedCompletionAt = ""
 	w.TranslationCompletedAt = now
 	w.UpdatedAt = now
+	w.mu.Unlock()
+}
+
+// failTranslationStep records a branch-local failure without failing the
+// entire translation stage. Combined STT + OCR runs independent workers, so
+// one usable transcript may continue to the review SRT while the unavailable
+// branch remains visibly failed for the user.
+func (w *subtitleWorkflow) failTranslationStep(id, detail string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	for index := range w.TranslationSteps {
+		if w.TranslationSteps[index].ID != id || w.TranslationSteps[index].State == "completed" {
+			continue
+		}
+		w.TranslationSteps[index].State = "failed"
+		w.TranslationSteps[index].Detail = detail
+		break
+	}
+	w.Message = detail
+	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	w.mu.Unlock()
+}
+
+func (w *subtitleWorkflow) addSourceWarning(detail string) {
+	if w == nil || strings.TrimSpace(detail) == "" {
+		return
+	}
+	w.mu.Lock()
+	if strings.TrimSpace(w.SourceWarning) == "" {
+		w.SourceWarning = strings.TrimSpace(detail)
+	} else if !strings.Contains(w.SourceWarning, strings.TrimSpace(detail)) {
+		w.SourceWarning += " | " + strings.TrimSpace(detail)
+	}
+	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	w.mu.Unlock()
 }
 
@@ -1180,13 +1219,6 @@ func (s Service) runWorkflowTranslation(workflow *subtitleWorkflow) {
 	step.SourceProgress = func(id string, percent uint8, detail string) {
 		workflow.updateTranslationStep(id, percent, detail, time.Time{})
 	}
-	workflow.updateTranslationStep("script_prepare", 0, "Preparing downloaded video for script creation", time.Time{})
-	if sourceWorkflowNeedsAudioSeparation(workflow.SourceMethod) {
-		if err := s.separateSourceAudioForSTT(context.Background(), step); err != nil {
-			s.failWorkflow(workflow, task, err)
-			return
-		}
-	}
 	var sourceErr error
 	switch normalizeWorkflowSourceMethod(workflow.SourceMethod) {
 	case sourceMethodVisualOCR:
@@ -1194,13 +1226,17 @@ func (s Service) runWorkflowTranslation(workflow *subtitleWorkflow) {
 	case sourceMethodSpeechToTextAndOCR:
 		sourceErr = s.extractCombinedSourceForReview(context.Background(), workflow, task, step)
 	default:
-		sourceErr = s.transcribeSourceForReview(context.Background(), workflow, task, step)
+		if sourceWorkflowNeedsAudioSeparation(workflow.SourceMethod) {
+			sourceErr = s.separateSourceAudioForSTT(context.Background(), step)
+		}
+		if sourceErr == nil {
+			sourceErr = s.transcribeSourceForReview(context.Background(), workflow, task, step)
+		}
 	}
 	if sourceErr != nil {
 		s.failWorkflow(workflow, task, sourceErr)
 		return
 	}
-	workflow.updateTranslationStep("script_prepare", 100, "Timed source script is ready", time.Time{})
 	workflow.updateTranslationStep("translation_prepare", 0, "Reading generated source SRT", time.Time{})
 	originPath := filepath.Join(workflow.TaskBasePath, types.SubtitleTaskOriginLanguageSrtFileName)
 	blocks, err := workflowSRTBlocks(originPath)

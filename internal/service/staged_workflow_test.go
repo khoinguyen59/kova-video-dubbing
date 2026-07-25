@@ -564,6 +564,9 @@ func TestCombinedSourceMethodKeepsBothExtractorsAndUsesOCRForAlignedText(t *test
 	if !seen["speech_to_text"] || !seen["visual_ocr"] || !seen["source_srt"] {
 		t.Fatalf("combined source steps = %#v", steps)
 	}
+	if seen["script_prepare"] || seen["download_video"] || seen["download_audio"] {
+		t.Fatalf("stage 02 exposed stage 01 media preparation: %#v", steps)
+	}
 	directory := t.TempDir()
 	sttPath := filepath.Join(directory, "stt.srt")
 	ocrPath := filepath.Join(directory, "ocr.srt")
@@ -579,6 +582,43 @@ func TestCombinedSourceMethodKeepsBothExtractorsAndUsesOCRForAlignedText(t *test
 	}
 	if replaced != 1 || len(merged) != 2 || merged[0].OriginLanguageSentence != "visible caption" || merged[1].OriginLanguageSentence != "second line" {
 		t.Fatalf("combined result = replaced %d, blocks %#v", replaced, merged)
+	}
+}
+
+func TestCombinedSourceExtractorsStartInParallel(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	result := make(chan [2]error, 1)
+	go func() {
+		sttErr, ocrErr := runParallelSourceExtractors(func() error {
+			started <- "stt"
+			<-release
+			return nil
+		}, func() error {
+			started <- "ocr"
+			<-release
+			return nil
+		})
+		result <- [2]error{sttErr, ocrErr}
+	}()
+
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case branch := <-started:
+			seen[branch] = true
+		case <-time.After(time.Second):
+			t.Fatalf("extractor branches did not start together: %#v", seen)
+		}
+	}
+	close(release)
+	select {
+	case errors := <-result:
+		if errors[0] != nil || errors[1] != nil {
+			t.Fatalf("parallel extractor errors = %v", errors)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parallel extractor branches did not finish")
 	}
 }
 

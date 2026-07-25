@@ -3,6 +3,7 @@ package service
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,15 @@ const (
 	colabAudioSeparationPath = "/audio/separations"
 	maxSeparatedStemBytes    = int64(2 * 1024 * 1024 * 1024)
 )
+
+var separationPollInterval = 2 * time.Second
+
+type colabSeparationJob struct {
+	JobID    string `json:"job_id"`
+	Status   string `json:"status"`
+	Progress uint8  `json:"progress"`
+	Detail   string `json:"detail,omitempty"`
+}
 
 // sourceWorkflowNeedsAudioSeparation is deliberately independent of the
 // platform-caption code.  When the source is transcribed, KOVA must send a
@@ -120,7 +130,10 @@ func requestColabAudioSeparation(ctx context.Context, endpoint, token, source, v
 	if progress != nil {
 		progress(15, "CUDA separator is receiving the source audio")
 	}
-	client := &http.Client{Timeout: 20 * time.Minute}
+	// The POST uploads the source and must return a 202 job immediately. Demucs
+	// itself runs in the notebook background; otherwise Cloudflare terminates
+	// the synchronous response with HTTP 524 after roughly two minutes.
+	client := &http.Client{Timeout: 5 * time.Minute}
 	response, err := client.Do(req)
 	writeErr := <-writeDone
 	if writeErr != nil {
@@ -129,24 +142,108 @@ func requestColabAudioSeparation(ctx context.Context, endpoint, token, source, v
 	if err != nil {
 		return fmt.Errorf("contact CUDA voice/music separator: %w", err)
 	}
-	defer response.Body.Close()
+	if response.StatusCode == http.StatusAccepted {
+		var job colabSeparationJob
+		decodeErr := json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&job)
+		response.Body.Close()
+		if decodeErr != nil {
+			return fmt.Errorf("CUDA separator returned an invalid asynchronous job: %w", decodeErr)
+		}
+		if strings.TrimSpace(job.JobID) == "" {
+			return errors.New("CUDA separator returned an asynchronous job without a job_id")
+		}
+		if progress != nil {
+			progress(maxUint8(job.Progress, 20), separationJobDetail(job, "Audio uploaded; Demucs CUDA job is queued"))
+		}
+		return pollColabAudioSeparation(ctx, client, strings.TrimRight(endpoint, "/")+"/"+job.JobID, token, vocals, background, progress)
+	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 16*1024))
+		response.Body.Close()
 		if response.StatusCode == http.StatusNotFound {
 			return errors.New("the connected STT Colab worker is older and has no audio-separation endpoint; reopen KOVA_STT_GPU.ipynb from this KOVA release and Run all")
 		}
+		if response.StatusCode == 524 {
+			return errors.New("the connected STT Colab worker still uses the old synchronous Demucs endpoint and Cloudflare timed it out; reopen the current KOVA_STT_GPU.ipynb, Run all, then reconnect its new URL/token")
+		}
 		return fmt.Errorf("CUDA voice/music separator returned %s: %s", response.Status, strings.TrimSpace(string(detail)))
 	}
+	defer response.Body.Close()
 	if progress != nil {
 		progress(85, "CUDA separator finished; saving vocal and background stems")
 	}
+	return storeSeparatedStemResponse(response.Body, vocals, background)
+}
+
+func pollColabAudioSeparation(ctx context.Context, client *http.Client, endpoint, token, vocals, background string, progress func(uint8, string)) error {
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	ticker := time.NewTicker(separationPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for CUDA voice/music separator: %w", ctx.Err())
+		case <-ticker.C:
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err := client.Do(request)
+		if err != nil {
+			return fmt.Errorf("poll CUDA voice/music separator: %w", err)
+		}
+		if response.StatusCode == http.StatusOK {
+			if progress != nil {
+				progress(95, "Demucs CUDA finished; downloading vocal and background stems")
+			}
+			err := storeSeparatedStemResponse(response.Body, vocals, background)
+			response.Body.Close()
+			return err
+		}
+		if response.StatusCode == http.StatusAccepted {
+			var job colabSeparationJob
+			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&job)
+			response.Body.Close()
+			if decodeErr != nil {
+				return fmt.Errorf("decode CUDA separation progress: %w", decodeErr)
+			}
+			if progress != nil {
+				progress(maxUint8(job.Progress, 20), separationJobDetail(job, "Demucs CUDA is separating vocals and background music"))
+			}
+			continue
+		}
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 16*1024))
+		response.Body.Close()
+		return fmt.Errorf("CUDA voice/music separation job returned %s: %s", response.Status, strings.TrimSpace(string(detail)))
+	}
+}
+
+func separationJobDetail(job colabSeparationJob, fallback string) string {
+	if strings.TrimSpace(job.Detail) != "" {
+		return strings.TrimSpace(job.Detail)
+	}
+	return fallback
+}
+
+func maxUint8(left, right uint8) uint8 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func storeSeparatedStemResponse(body io.Reader, vocals, background string) error {
 	temporary, err := os.CreateTemp(filepath.Dir(vocals), "kova-stems-*.zip")
 	if err != nil {
 		return fmt.Errorf("create stem archive: %w", err)
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	written, copyErr := io.Copy(temporary, io.LimitReader(response.Body, maxSeparatedStemBytes+1))
+	written, copyErr := io.Copy(temporary, io.LimitReader(body, maxSeparatedStemBytes+1))
 	closeErr := temporary.Close()
 	if copyErr != nil {
 		return fmt.Errorf("download separated stems: %w", copyErr)

@@ -220,7 +220,6 @@ function safePercent(value: number | undefined): number {
 
 function workflowStepTitle(locale: Locale, id: string): string {
   const titles: Record<string, Record<Locale, string>> = {
-	 script_prepare: { vi: "Chuẩn bị video để tạo script", en: "Prepare video for script creation" },
 	translation_prepare: { vi: "Chuẩn bị SRT đã duyệt", en: "Prepare approved SRT" },
 	translation_model: { vi: "Dịch các cue bằng model", en: "Translate cues with the model" },
 	translation_write: { vi: "Ghi SRT để kiểm tra", en: "Write reviewable SRT" },
@@ -1267,7 +1266,16 @@ export default function App() {
 	// translation. Use its independent task steps instead.
 	const workflowPercent =
 		activeStage === "translation" && sourceSteps.length > 0
-			? Math.round(sourceSteps.reduce((sum, step) => sum + safePercent(step.percent), 0) / sourceSteps.length)
+			? Math.round(
+					sourceSteps.reduce(
+						(sum, step) =>
+							sum +
+							(step.state === "completed" || step.state === "failed"
+								? 100
+								: safePercent(step.percent)),
+						0,
+					) / sourceSteps.length,
+				)
 			: workerProcessPercent;
   const workflowStepsHeading =
     activeStage === "render"

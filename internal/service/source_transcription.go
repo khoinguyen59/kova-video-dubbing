@@ -25,7 +25,7 @@ const (
 // transcribeSourceForReview is deliberately source-only. It downloads no
 // platform captions and never invokes translation; the generated original SRT
 // is the checkpoint the user must review before any translation stage exists.
-func (s Service) transcribeSourceForReview(ctx context.Context, workflow *subtitleWorkflow, task *types.SubtitleTask, step *types.SubtitleTaskStepParam) error {
+func (s Service) transcribeSourceForReview(ctx context.Context, workflow *subtitleWorkflow, task *types.SubtitleTask, step *types.SubtitleTaskStepParam, destination ...string) error {
 	if s.Transcriber == nil {
 		return errors.New("speech-to-text chưa được khởi tạo; hãy kiểm tra Faster-Whisper và model cục bộ trong Cài đặt")
 	}
@@ -84,15 +84,23 @@ func (s Service) transcribeSourceForReview(ctx context.Context, workflow *subtit
 		block.Index = index + 1
 	}
 
-	reportSourceProgress(step, "source_srt", 0, "Writing review SRT")
-	srtPath := filepath.Join(step.TaskBasePath, types.SubtitleTaskOriginLanguageSrtFileName)
+	canonicalPath := filepath.Join(step.TaskBasePath, types.SubtitleTaskOriginLanguageSrtFileName)
+	srtPath := canonicalPath
+	if len(destination) > 0 && strings.TrimSpace(destination[0]) != "" {
+		srtPath = strings.TrimSpace(destination[0])
+	}
+	if srtPath == canonicalPath {
+		reportSourceProgress(step, "source_srt", 0, "Writing review SRT")
+	}
 	if err := writeSourceSRT(srtPath, allBlocks); err != nil {
 		return err
 	}
-	if err := writeWorkflowText(filepath.Join(step.TaskBasePath, "output", types.SubtitleTaskOriginLanguageTextFileName), allBlocks, false); err != nil {
-		return err
+	if srtPath == canonicalPath {
+		if err := writeWorkflowText(filepath.Join(step.TaskBasePath, "output", types.SubtitleTaskOriginLanguageTextFileName), allBlocks, false); err != nil {
+			return err
+		}
+		reportSourceProgress(step, "source_srt", 100, "Review SRT ready")
 	}
-	reportSourceProgress(step, "source_srt", 100, "Review SRT ready")
 	if workflow != nil && strings.EqualFold(strings.TrimSpace(workflow.OriginLanguage), "auto") && detectedLanguage != "" {
 		workflow.mu.Lock()
 		workflow.OriginLanguage = detectedLanguage
