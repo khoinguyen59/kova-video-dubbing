@@ -38,6 +38,12 @@ type Runner struct {
 	deps Dependencies
 }
 
+func (r *Runner) reportProgress(phase string, current, total int, detail string) {
+	if r != nil && r.deps.Progress != nil {
+		r.deps.Progress(phase, current, total, detail)
+	}
+}
+
 func NewRunner(deps Dependencies) *Runner {
 	if deps.Config.MaxChunkSize <= 0 {
 		deps.Config = DefaultConfig()
@@ -54,6 +60,12 @@ func NewRunner(deps Dependencies) *Runner {
 	if deps.OutputVideo == "" && deps.Workdir != "" {
 		deps.OutputVideo = filepath.Join(deps.Workdir, types.SubtitleTaskVideoWithTtsFileName)
 	}
+	if deps.OutputMixedAudio == "" && deps.Workdir != "" && deps.BackgroundAudio != "" {
+		deps.OutputMixedAudio = filepath.Join(deps.Workdir, types.TtsMixedAudioFileName)
+	}
+	if deps.BackgroundVolume <= 0 || deps.BackgroundVolume > 1 {
+		deps.BackgroundVolume = 0.38
+	}
 	return &Runner{deps: deps}
 }
 
@@ -68,6 +80,7 @@ func (r *Runner) Synthesize(ctx context.Context) (AudioResult, error) {
 		return AudioResult{}, err
 	}
 
+	r.reportProgress("prepare", 0, 1, "Checking the approved dubbing SRT")
 	cues, err := ParseSRTFile(r.deps.InputSRT)
 	if err != nil {
 		return AudioResult{}, err
@@ -87,34 +100,46 @@ func (r *Runner) Synthesize(ctx context.Context) (AudioResult, error) {
 		return AudioResult{}, err
 	}
 
-	planner := NewPlanner(r.deps.Config, NewStatisticalEstimator(), NewLLMOptimizer(r.deps.Chat))
+	// The desktop workflow deliberately does not auto-rewrite the reviewed
+	// translation. A previous implementation could make one remote LLM call
+	// per cue here, leaving a 132-cue job at 75% for tens of minutes with no
+	// visible work. Timing is measured and reported for human review instead.
+	config := r.deps.Config
+	config.EnableTextRewrite = false
+	config.RewriteMaxAttempts = 0
+	planner := NewPlanner(config, NewStatisticalEstimator(), nil)
 	plan, chunks, err := planner.Plan(cleanedCues, r.deps.Language)
 	if err != nil {
 		return AudioResult{}, err
 	}
+	r.reportProgress("prepare", 1, 1, "Approved SRT is ready; no automatic text rewrite was performed")
 
 	var fitted []PlanItem
 	var fittedChunks []Chunk
 	var report Report
 	_, durationAware := r.deps.TTS.(DurationAwareTTS)
 	if durationAware {
-		plan, err = GenerateRawSegments(ctx, r.deps.TTS, plan, r.deps.Voice, segmentsDir, r.deps.FFmpeg, r.deps.Duration)
+		plan, err = generateRawSegments(ctx, r.deps.TTS, plan, r.deps.Voice, segmentsDir, r.deps.FFmpeg, r.deps.Duration, r.deps.Progress)
 		if err != nil {
 			return AudioResult{}, err
 		}
-		fitted, report, err = FitCueTimeline(plan, r.deps.Config)
+		r.reportProgress("fit", 0, 1, "Calculating timing fit for generated speech")
+		fitted, report, err = FitCueTimeline(plan, config)
 		if err != nil {
 			return AudioResult{}, err
 		}
+		r.reportProgress("fit", 1, 1, "Timing fit calculated")
 	} else {
-		plan, chunks, err = GenerateRawChunkSegments(ctx, r.deps.TTS, plan, chunks, r.deps.Voice, segmentsDir, r.deps.FFmpeg, r.deps.Duration)
+		plan, chunks, err = generateRawChunkSegments(ctx, r.deps.TTS, plan, chunks, r.deps.Voice, segmentsDir, r.deps.FFmpeg, r.deps.Duration, r.deps.Progress)
 		if err != nil {
 			return AudioResult{}, err
 		}
-		fitted, fittedChunks, report, err = FitTimeline(plan, chunks, r.deps.Config)
+		r.reportProgress("fit", 0, 1, "Calculating timing fit for generated speech")
+		fitted, fittedChunks, report, err = FitTimeline(plan, chunks, config)
 		if err != nil {
 			return AudioResult{}, err
 		}
+		r.reportProgress("fit", 1, 1, "Timing fit calculated")
 	}
 
 	dubSRT := filepath.Join(dubbingDir, DubSubtitleFileName)
@@ -132,11 +157,11 @@ func (r *Runner) Synthesize(ctx context.Context) (AudioResult, error) {
 		return AudioResult{}, err
 	}
 	if durationAware {
-		if err := AssembleAudio(fitted, segmentsDir, r.deps.OutputAudio, r.deps.FFmpeg); err != nil {
+		if err := assembleAudio(fitted, segmentsDir, r.deps.OutputAudio, r.deps.FFmpeg, r.deps.Progress); err != nil {
 			return AudioResult{}, err
 		}
 	} else {
-		if err := AssembleChunkAudio(fitted, fittedChunks, segmentsDir, r.deps.OutputAudio, r.deps.FFmpeg); err != nil {
+		if err := assembleChunkAudio(fitted, fittedChunks, segmentsDir, r.deps.OutputAudio, r.deps.FFmpeg, r.deps.Progress); err != nil {
 			return AudioResult{}, err
 		}
 	}
@@ -163,7 +188,20 @@ func (r *Runner) Mux() (string, error) {
 	if err := ensureParentDir(r.deps.OutputVideo); err != nil {
 		return "", err
 	}
-	if err := r.deps.FFmpeg(buildMuxArgs(r.deps.InputVideo, r.deps.OutputAudio, r.deps.OutputVideo)); err != nil {
+	audio := r.deps.OutputAudio
+	if r.deps.BackgroundAudio != "" {
+		if err := ensureParentDir(r.deps.OutputMixedAudio); err != nil {
+			return "", err
+		}
+		if err := r.deps.FFmpeg(buildBackgroundMixArgs(r.deps.OutputAudio, r.deps.BackgroundAudio, r.deps.OutputMixedAudio, r.deps.BackgroundVolume)); err != nil {
+			return "", err
+		}
+		if err := ensureNonEmptyFile(r.deps.OutputMixedAudio, "mixed output audio"); err != nil {
+			return "", err
+		}
+		audio = r.deps.OutputMixedAudio
+	}
+	if err := r.deps.FFmpeg(buildMuxArgs(r.deps.InputVideo, audio, r.deps.OutputVideo)); err != nil {
 		return "", err
 	}
 	if err := ensureNonEmptyFile(r.deps.OutputVideo, "output video"); err != nil {
@@ -218,6 +256,14 @@ func (r *Runner) validateMux() error {
 	}
 	if err := ensureNonEmptyFile(r.deps.OutputAudio, "output audio"); err != nil {
 		return err
+	}
+	if r.deps.BackgroundAudio != "" {
+		if err := ensureNonEmptyFile(r.deps.BackgroundAudio, "background audio stem"); err != nil {
+			return err
+		}
+		if r.deps.OutputMixedAudio == "" {
+			return errors.New("mixed output audio is required when a background stem is selected")
+		}
 	}
 	if r.deps.OutputVideo == "" {
 		return errors.New("output video is required")

@@ -2,7 +2,10 @@ package util
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	"kova/internal/types"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -259,10 +263,20 @@ func GetRecognizableString(s string) string {
 }
 
 func GetAudioDuration(inputFile string) (float64, error) {
+	ffprobePath := strings.TrimSpace(storage.FfprobePath)
+	if ffprobePath == "" {
+		return 0, errors.New("ffprobe has not been initialized; start dubbing through KOVA preflight")
+	}
 	// 使用 ffprobe 获取精确时长
-	cmd := exec.Command(storage.FfprobePath, "-i", inputFile, "-show_entries", "format=duration", "-v", "quiet", "-of", "csv=p=0")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffprobePath, "-i", inputFile, "-show_entries", "format=duration", "-v", "quiet", "-of", "csv=p=0")
+	processutil.HideConsole(cmd)
 	cmdOutput, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, fmt.Errorf("GetAudioDuration timed out after 15 seconds for %s", inputFile)
+		}
 		return 0, fmt.Errorf("GetAudioDuration failed to get audio duration: %w", err)
 	}
 

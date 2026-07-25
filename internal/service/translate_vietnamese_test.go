@@ -1,11 +1,23 @@
 package service
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"kova/internal/types"
 	"kova/pkg/util"
 )
+
+func TestSingleTextPromptIncludesInputWithoutFmtExtraMarker(t *testing.T) {
+	prompt := fmt.Sprintf(types.SplitTextPrompt, "Vietnamese", "Source sentence.")
+	if !strings.Contains(prompt, "Input:\nSource sentence.") {
+		t.Fatalf("single-text prompt does not contain the source input: %q", prompt)
+	}
+	if strings.Contains(prompt, "%!(EXTRA") {
+		t.Fatalf("single-text prompt contains fmt extra marker: %q", prompt)
+	}
+}
 
 func TestNeedsVietnameseReview(t *testing.T) {
 	tests := []struct {

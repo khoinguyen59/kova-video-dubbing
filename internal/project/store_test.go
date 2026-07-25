@@ -100,6 +100,36 @@ func TestProjectStoresLegacyWorkflowTaskIDWithoutSecrets(t *testing.T) {
 	}
 }
 
+func TestDeleteProjectRemovesTimelineAndArtifacts(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "kova.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	created, err := store.CreateProject(ctx, "Delete me", "vi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartStage(ctx, created.ID, StageSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateArtifact(ctx, Artifact{ProjectID: created.ID, StageRunID: run.ID, Kind: "source_review_draft", Path: "projects/test/draft.txt", Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteProject(ctx, created.ID); err != nil {
+		t.Fatalf("DeleteProject() error = %v", err)
+	}
+	if _, err := store.Snapshot(ctx, created.ID); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("deleted snapshot error = %v, want ErrProjectNotFound", err)
+	}
+	projects, err := store.ListProjects(ctx)
+	if err != nil || len(projects) != 0 {
+		t.Fatalf("remaining projects = %+v, err=%v", projects, err)
+	}
+}
+
 func TestSetFailureDetailReplacesGenericBackgroundFailure(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "kova.db"))
 	if err != nil {

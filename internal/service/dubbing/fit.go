@@ -97,7 +97,7 @@ func FitCueTimeline(plan []PlanItem, cfg Config) ([]PlanItem, Report, error) {
 		if available <= 0 {
 			return nil, report, fmt.Errorf("cue %d has non-positive duration: %.3f", fitted[i].Index, available)
 		}
-		if fitted[i].OriginalStart < lastEnd {
+		if startsBeforeTimelineBoundary(fitted[i].OriginalStart, lastEnd) {
 			return nil, report, fmt.Errorf("cue %d starts before previous cue ends", fitted[i].Index)
 		}
 		if fitted[i].ActualDuration <= 0 {

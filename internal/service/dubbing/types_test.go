@@ -10,7 +10,7 @@ func TestDefaultConfigValues(t *testing.T) {
 	if cfg.SpeedMin != 0.95 || cfg.SpeedAccept != 1.08 || cfg.SpeedMax != 1.12 {
 		t.Fatalf("DefaultConfig speed = %+v", cfg)
 	}
-	if !cfg.EnableTextRewrite || cfg.RewriteMaxAttempts != 2 || cfg.Estimator != "statistical" {
+	if cfg.EnableTextRewrite || cfg.RewriteMaxAttempts != 0 || cfg.Estimator != "statistical" {
 		t.Fatalf("DefaultConfig rewrite = %+v", cfg)
 	}
 }

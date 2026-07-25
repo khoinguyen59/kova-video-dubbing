@@ -94,16 +94,26 @@ func (s Service) muxDubbedAudioVideo(stepParam *types.SubtitleTaskStepParam) err
 	}
 	outputAudio, outputVideo := dubbingOutputPaths(stepParam)
 	runner := dubbing.NewRunner(dubbing.Dependencies{
-		Workdir:     stepParam.TaskBasePath,
-		InputVideo:  stepParam.InputVideoPath,
-		OutputAudio: outputAudio,
-		OutputVideo: outputVideo,
+		Workdir:          stepParam.TaskBasePath,
+		InputVideo:       stepParam.InputVideoPath,
+		OutputAudio:      outputAudio,
+		OutputVideo:      outputVideo,
+		BackgroundAudio:  stepParam.BackgroundAudioFilePath,
+		OutputMixedAudio: stepParam.TtsMixedAudioFilePath,
+		BackgroundVolume: 0.38,
 	})
 	video, err := runner.Mux()
 	if err != nil {
 		return fmt.Errorf("muxDubbedAudioVideo dubbing runner error: %w", err)
 	}
+	// Keep the review artifact clean. The mixed file is used only for the
+	// completed video and is exposed as a separate artifact for inspection.
 	stepParam.TtsResultFilePath = outputAudio
+	if stepParam.BackgroundAudioFilePath != "" {
+		if stepParam.TtsMixedAudioFilePath == "" {
+			stepParam.TtsMixedAudioFilePath = filepath.Join(stepParam.TaskBasePath, types.TtsMixedAudioFileName)
+		}
+	}
 	stepParam.VideoWithTtsFilePath = video
 	if stepParam.TaskPtr != nil {
 		stepParam.TaskPtr.ProcessPct = 92
@@ -191,6 +201,16 @@ func (s Service) newDubbingRunner(stepParam *types.SubtitleTaskStepParam) (*dubb
 		InputVideo:  stepParam.InputVideoPath,
 		OutputAudio: outputAudio,
 		OutputVideo: outputVideo,
+		Progress: func(phase string, current, total int, detail string) {
+			if stepParam.DubbingProgress == nil {
+				return
+			}
+			percent := uint8(0)
+			if total > 0 {
+				percent = uint8((current * 100) / total)
+			}
+			stepParam.DubbingProgress(phase, percent, detail)
+		},
 		Config: dubbing.Config{
 			MinSubtitleDuration: config.Conf.Dubbing.MinSubtitleDuration,
 			MaxChunkSize:        config.Conf.Dubbing.MaxChunkSize,
@@ -198,9 +218,12 @@ func (s Service) newDubbingRunner(stepParam *types.SubtitleTaskStepParam) (*dubb
 			SpeedMin:            config.Conf.Dubbing.SpeedMin,
 			SpeedAccept:         config.Conf.Dubbing.SpeedAccept,
 			SpeedMax:            config.Conf.Dubbing.SpeedMax,
-			EnableTextRewrite:   config.Conf.Dubbing.EnableTextRewrite,
-			RewriteMaxAttempts:  config.Conf.Dubbing.RewriteMaxAttempts,
-			Estimator:           config.Conf.Dubbing.Estimator,
+			// The translation was explicitly approved by the user. Do not silently
+			// rewrite every cue through the LLM while creating speech; timing
+			// concerns are emitted in the review report instead.
+			EnableTextRewrite:  false,
+			RewriteMaxAttempts: 0,
+			Estimator:          config.Conf.Dubbing.Estimator,
 		},
 	}), nil
 }

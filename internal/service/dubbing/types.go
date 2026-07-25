@@ -34,10 +34,13 @@ func DefaultConfig() Config {
 		// Keep the naturalness boundary deliberately conservative. Anything
 		// above 1.08x is shown for review; anything above 1.12x is a hard
 		// rewrite-before-approval signal, never silently accepted as normal.
-		SpeedAccept:        1.08,
-		SpeedMax:           1.12,
-		EnableTextRewrite:  true,
-		RewriteMaxAttempts: 2,
+		SpeedAccept: 1.08,
+		SpeedMax:    1.12,
+		// A reviewed translation is user-owned input. KOVA must not silently
+		// send every cue to another LLM before synthesis; timing issues are
+		// reported for review instead.
+		EnableTextRewrite:  false,
+		RewriteMaxAttempts: 0,
 		Estimator:          "statistical",
 	}
 }
@@ -92,6 +95,11 @@ type Report struct {
 type CommandRunner func(args []string) error
 type DurationProbe func(path string) (float64, error)
 
+// ProgressReporter reports bounded, observable synthesis work. It never
+// carries subtitle text or credentials, so it is safe to persist in a desktop
+// workflow status message.
+type ProgressReporter func(phase string, current, total int, detail string)
+
 // DurationAwareTTS can generate directly into a subtitle-sized slot. Native
 // duration control is preferred over stretching a completed sentence later.
 type DurationAwareTTS interface {
@@ -109,9 +117,16 @@ type Dependencies struct {
 	InputVideo  string
 	OutputAudio string
 	OutputVideo string
-	Config      Config
-	FFmpeg      CommandRunner
-	Duration    DurationProbe
+	// BackgroundAudio is the no-vocals stem created before STT.  It remains
+	// separate from OutputAudio so users can review the clean dubbed speech
+	// before it is mixed into the completed video.
+	BackgroundAudio  string
+	OutputMixedAudio string
+	BackgroundVolume float64
+	Config           Config
+	FFmpeg           CommandRunner
+	Duration         DurationProbe
+	Progress         ProgressReporter
 }
 
 type TextOptimizer interface {

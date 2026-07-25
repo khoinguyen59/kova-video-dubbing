@@ -76,6 +76,27 @@ func IsYouTubeURL(value string) bool {
 	return host == "youtube.com" || host == "m.youtube.com" || host == "music.youtube.com" || host == "youtu.be"
 }
 
+// IsSupportedVideoURL is the remote-source policy used by the desktop
+// workflow. yt-dlp extracts the media, while this small allow-list gives users
+// a clear error instead of sending arbitrary web pages to the downloader.
+// Short TikTok and Douyin URLs are supported through their subdomains.
+func IsSupportedVideoURL(value string) bool {
+	parsedURL, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || (parsedURL.Scheme != "https" && parsedURL.Scheme != "http") {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsedURL.Hostname()))
+	if host == "" {
+		return false
+	}
+	for _, domain := range []string{"youtube.com", "youtu.be", "tiktok.com", "douyin.com", "iesdouyin.com", "bilibili.com"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
+
 func GetBilibiliVideoId(url string) string {
 	re := regexp.MustCompile(`https://(?:www\.)?bilibili\.com/(?:video/|video/av\d+/)(BV[a-zA-Z0-9]+)`)
 	matches := re.FindStringSubmatch(url)

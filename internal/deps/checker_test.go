@@ -2,6 +2,7 @@ package deps
 
 import (
 	"errors"
+	"kova/internal/storage"
 	"kova/log"
 	"os"
 	"path/filepath"
@@ -16,6 +17,60 @@ import (
 func TestMain(m *testing.M) {
 	log.Logger = zap.NewNop()
 	os.Exit(m.Run())
+}
+
+func TestEnsureDubbingMediaToolsResolvesExecutableFfmpegAndFfprobe(t *testing.T) {
+	previousDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(filepath.Join("..", "..")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousDir) })
+	originalFFmpeg, originalFFprobe := storage.FfmpegPath, storage.FfprobePath
+	t.Cleanup(func() {
+		storage.FfmpegPath = originalFFmpeg
+		storage.FfprobePath = originalFFprobe
+	})
+	storage.FfmpegPath = ""
+	storage.FfprobePath = ""
+
+	if err := EnsureDubbingMediaTools(); err != nil {
+		t.Fatalf("EnsureDubbingMediaTools() error = %v", err)
+	}
+	if strings.TrimSpace(storage.FfmpegPath) == "" || strings.TrimSpace(storage.FfprobePath) == "" {
+		t.Fatalf("media tools were not initialized: ffmpeg=%q ffprobe=%q", storage.FfmpegPath, storage.FfprobePath)
+	}
+	if err := verifyMediaTool(storage.FfprobePath); err != nil {
+		t.Fatalf("resolved ffprobe cannot run: %v", err)
+	}
+}
+
+func TestEnsureDubbingMediaToolsResolvesPortableBuildBin(t *testing.T) {
+	previousDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(filepath.Join("..", "..", "build")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousDir) })
+	originalFFmpeg, originalFFprobe := storage.FfmpegPath, storage.FfprobePath
+	t.Cleanup(func() {
+		storage.FfmpegPath = originalFFmpeg
+		storage.FfprobePath = originalFFprobe
+	})
+	storage.FfmpegPath = ""
+	storage.FfprobePath = ""
+
+	if err := EnsureDubbingMediaTools(); err != nil {
+		t.Fatalf("EnsureDubbingMediaTools() from build directory error = %v", err)
+	}
+	portableBin := filepath.Clean(filepath.Join("bin", "ffprobe.exe"))
+	if !strings.Contains(filepath.Clean(storage.FfprobePath), portableBin) {
+		t.Fatalf("ffprobe = %q, want portable build/bin/ffprobe.exe", storage.FfprobePath)
+	}
 }
 
 func TestResolveYtDlpUpdatesExistingBundledBinaryToStableRelease(t *testing.T) {

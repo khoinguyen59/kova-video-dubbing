@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"io"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	"kova/pkg/util"
 	"math"
@@ -38,6 +39,7 @@ func buildFFmpegCmd(input string, start, end float64) (*exec.Cmd, error) {
 		"-af", "lowpass=f=3000,highpass=f=300",
 		"pipe:1",
 	)
+	processutil.HideConsole(cmd)
 	return cmd, nil
 }
 
@@ -170,6 +172,7 @@ func ClipAudio(input, output string, start, end float64) error {
 		"-i", input,
 		output,
 	)
+	processutil.HideConsole(cmd)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to clip audio: [%s] %w", cmd.String(), err)
 	}

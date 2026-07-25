@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	"kova/log"
 	"os"
@@ -113,6 +114,7 @@ func (c *EdgeTtsClient) attemptTTS(tempFileName, voice, absOutputFile string, at
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, storage.EdgeTtsPath, cmdArgs...)
+	processutil.HideConsole(cmd)
 	log.GetLogger().Info("edge-tts转录开始",
 		zap.String("cmd", cmd.String()),
 		zap.String("temp_file", tempFileName),

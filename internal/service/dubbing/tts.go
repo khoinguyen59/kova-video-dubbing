@@ -11,6 +11,10 @@ import (
 )
 
 func GenerateRawSegments(ctx context.Context, tts types.Ttser, plan []PlanItem, voice, dir string, run CommandRunner, duration DurationProbe) ([]PlanItem, error) {
+	return generateRawSegments(ctx, tts, plan, voice, dir, run, duration, nil)
+}
+
+func generateRawSegments(ctx context.Context, tts types.Ttser, plan []PlanItem, voice, dir string, run CommandRunner, duration DurationProbe, progress ProgressReporter) ([]PlanItem, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -31,6 +35,9 @@ func GenerateRawSegments(ctx context.Context, tts types.Ttser, plan []PlanItem, 
 			return nil, err
 		}
 
+		if progress != nil {
+			progress("synthesize", i, len(plan), fmt.Sprintf("Creating speech segment %d/%d", i+1, len(plan)))
+		}
 		output := filepath.Join(rawDir, fmt.Sprintf("%d.wav", plan[i].Index))
 		if IsSilenceOnlyText(plan[i].SpokenText) {
 			if err := WriteTinySilence(output, run); err != nil {
@@ -51,12 +58,19 @@ func GenerateRawSegments(ctx context.Context, tts types.Ttser, plan []PlanItem, 
 			return nil, fmt.Errorf("measure segment %d duration failed for %s: %w", plan[i].Index, output, err)
 		}
 		plan[i].ActualDuration = dur
+		if progress != nil {
+			progress("synthesize", i+1, len(plan), fmt.Sprintf("Speech segment %d/%d is ready", i+1, len(plan)))
+		}
 	}
 
 	return plan, nil
 }
 
 func GenerateRawChunkSegments(ctx context.Context, tts types.Ttser, plan []PlanItem, chunks []Chunk, voice, dir string, run CommandRunner, duration DurationProbe) ([]PlanItem, []Chunk, error) {
+	return generateRawChunkSegments(ctx, tts, plan, chunks, voice, dir, run, duration, nil)
+}
+
+func generateRawChunkSegments(ctx context.Context, tts types.Ttser, plan []PlanItem, chunks []Chunk, voice, dir string, run CommandRunner, duration DurationProbe, progress ProgressReporter) ([]PlanItem, []Chunk, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -83,6 +97,9 @@ func GenerateRawChunkSegments(ctx context.Context, tts types.Ttser, plan []PlanI
 			return nil, nil, err
 		}
 
+		if progress != nil {
+			progress("synthesize", i, len(outChunks), fmt.Sprintf("Creating speech block %d/%d", i+1, len(outChunks)))
+		}
 		output := filepath.Join(rawDir, fmt.Sprintf("chunk_%d.wav", outChunks[i].ID))
 		if IsSilenceOnlyText(text) {
 			if err := WriteTinySilence(output, run); err != nil {
@@ -102,6 +119,9 @@ func GenerateRawChunkSegments(ctx context.Context, tts types.Ttser, plan []PlanI
 			return nil, nil, fmt.Errorf("measure chunk %d duration failed for %s: %w", outChunks[i].ID, output, err)
 		}
 		outChunks[i].ActualDuration = dur
+		if progress != nil {
+			progress("synthesize", i+1, len(outChunks), fmt.Sprintf("Speech block %d/%d is ready", i+1, len(outChunks)))
+		}
 	}
 
 	return outPlan, outChunks, nil
@@ -128,6 +148,11 @@ func retryTTS(tts types.Ttser, text, voice, output string, attempts int) error {
 func retryTTSWithDuration(tts types.Ttser, text, voice, output string, duration float64, attempts int) error {
 	if attempts <= 0 {
 		return fmt.Errorf("attempts must be > 0: %d", attempts)
+	}
+	if limited, ok := tts.(interface{ TTSMaxAttempts() int }); ok {
+		if max := limited.TTSMaxAttempts(); max > 0 && max < attempts {
+			attempts = max
+		}
 	}
 
 	var last error

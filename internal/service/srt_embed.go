@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	subtitlestyle "kova/internal/subtitle_style"
 	"kova/internal/types"
@@ -41,6 +42,13 @@ const (
 )
 
 func (s Service) embedSubtitles(ctx context.Context, stepParam *types.SubtitleTaskStepParam) error {
+	return s.embedSubtitlesWithProgress(ctx, stepParam, nil)
+}
+
+// embedSubtitlesWithProgress retains the legacy wrapper above while allowing
+// the staged desktop workflow to surface real FFmpeg progress for final video
+// rendering.
+func (s Service) embedSubtitlesWithProgress(ctx context.Context, stepParam *types.SubtitleTaskStepParam, progress RenderProgressFunc) error {
 	var err error
 	if stepParam.EmbedSubtitleVideoType == "horizontal" || stepParam.EmbedSubtitleVideoType == "vertical" || stepParam.EmbedSubtitleVideoType == "all" {
 		var width, height int
@@ -57,7 +65,7 @@ func (s Service) embedSubtitles(ctx context.Context, stepParam *types.SubtitleTa
 				return nil
 			}
 			log.GetLogger().Info("合成视频：横屏")
-			err = embedSubtitles(stepParam, true, stepParam.EnableTts)
+			err = embedSubtitles(stepParam, true, stepParam.EnableTts, progress)
 			if err != nil {
 				log.GetLogger().Error("embedSubtitles embedSubtitles error", zap.Any("step param", stepParam), zap.Error(err))
 				return fmt.Errorf("embedSubtitles embedSubtitles error: %w", err)
@@ -75,7 +83,7 @@ func (s Service) embedSubtitles(ctx context.Context, stepParam *types.SubtitleTa
 				stepParam.InputVideoPath = transferredVerticalVideoPath
 			}
 			log.GetLogger().Info("合成视频：竖屏")
-			err = embedSubtitles(stepParam, false, stepParam.EnableTts)
+			err = embedSubtitles(stepParam, false, stepParam.EnableTts, progress)
 			if err != nil {
 				log.GetLogger().Error("embedSubtitles embedSubtitles error", zap.Any("step param", stepParam), zap.Error(err))
 				return fmt.Errorf("embedSubtitles embedSubtitles error: %w", err)
@@ -867,7 +875,7 @@ func srtToAss(inputSRT, outputASS string, isHorizontal bool, stepParam *types.Su
 	return nil
 }
 
-func embedSubtitles(stepParam *types.SubtitleTaskStepParam, isHorizontal bool, withTts bool) error {
+func embedSubtitles(stepParam *types.SubtitleTaskStepParam, isHorizontal bool, withTts bool, progress RenderProgressFunc) error {
 	outputFileName := types.SubtitleTaskVerticalEmbedVideoFileName
 	if isHorizontal {
 		outputFileName = types.SubtitleTaskHorizontalEmbedVideoFileName
@@ -888,6 +896,7 @@ func embedSubtitles(stepParam *types.SubtitleTaskStepParam, isHorizontal bool, w
 		OutputFile:   filepath.Join(stepParam.TaskBasePath, "output", outputFileName),
 		Horizontal:   isHorizontal,
 		StepParam:    stepParam,
+		Progress:     progress,
 	})
 	return err
 }
@@ -969,6 +978,7 @@ func getResolution(inputVideo string) (int, int, error) {
 		inputVideo,
 	}
 	cmd := exec.Command(storage.FfprobePath, cmdArgs...)
+	processutil.HideConsole(cmd)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -1018,6 +1028,7 @@ func convertToVertical(inputVideo, outputVideo, majorTitle, minorTitle string) e
 		outputVideo,
 	}
 	cmd := exec.Command(storage.FfmpegPath, cmdArgs...)
+	processutil.HideConsole(cmd)
 	var output []byte
 	output, err = cmd.CombinedOutput()
 	if err != nil {

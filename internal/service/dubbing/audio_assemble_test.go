@@ -237,3 +237,63 @@ func TestAssembleChunkAudioPreservesGapAfterShortChunkAudio(t *testing.T) {
 		t.Fatalf("silence before second chunk = %q, want 4.000", silenceDuration)
 	}
 }
+
+func TestAssembleChunkAudioAllowsSubMillisecondBoundaryNoise(t *testing.T) {
+	dir := t.TempDir()
+	rawDir := filepath.Join(dir, "raw")
+	if err := os.MkdirAll(rawDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"chunk_1.wav", "chunk_2.wav"} {
+		if err := os.WriteFile(filepath.Join(rawDir, name), []byte("raw"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := []PlanItem{
+		{Index: 1, NewStart: 0, NewEnd: 1.0004, SpeedFactor: 1, ChunkID: 1},
+		{Index: 2, NewStart: 1, NewEnd: 2, SpeedFactor: 1, ChunkID: 2},
+	}
+	chunks := []Chunk{
+		{ID: 1, Items: []int{0}, Start: 0, End: 1, ActualDuration: 1},
+		{ID: 2, Items: []int{1}, Start: 1, End: 2, ActualDuration: 1},
+	}
+
+	err := AssembleChunkAudio(plan, chunks, dir, filepath.Join(dir, "out.wav"), func(args []string) error {
+		return os.WriteFile(args[len(args)-1], []byte("media"), 0644)
+	})
+	if err != nil {
+		t.Fatalf("AssembleChunkAudio() error = %v, want sub-millisecond boundary noise to be accepted", err)
+	}
+}
+
+func TestAssembleChunkAudioRejectsMaterialBoundaryOverlap(t *testing.T) {
+	dir := t.TempDir()
+	rawDir := filepath.Join(dir, "raw")
+	if err := os.MkdirAll(rawDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"chunk_1.wav", "chunk_2.wav"} {
+		if err := os.WriteFile(filepath.Join(rawDir, name), []byte("raw"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := []PlanItem{
+		{Index: 1, NewStart: 0, NewEnd: 1.003, SpeedFactor: 1, ChunkID: 1},
+		{Index: 2, NewStart: 1, NewEnd: 2, SpeedFactor: 1, ChunkID: 2},
+	}
+	chunks := []Chunk{
+		{ID: 1, Items: []int{0}, Start: 0, End: 1, ActualDuration: 1},
+		{ID: 2, Items: []int{1}, Start: 1, End: 2, ActualDuration: 1},
+	}
+	calls := 0
+	err := AssembleChunkAudio(plan, chunks, dir, filepath.Join(dir, "out.wav"), func(args []string) error {
+		calls++
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "starts before previous end") {
+		t.Fatalf("AssembleChunkAudio() error = %v, want material overlap error", err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner calls = %d, want 0 before validation fails", calls)
+	}
+}

@@ -177,3 +177,14 @@ class ProfileStore:
                 (profile_id,),
             ).fetchone()
         return ProfileVersion(**dict(row)) if row else None
+
+    def delete_profile(self, profile_id: str) -> list[str]:
+        """Delete a profile and return only its worker-owned reference paths."""
+        with self._lock, self._connection:
+            rows = self._connection.execute(
+                "SELECT reference_path FROM profile_versions WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
+            deleted = self._connection.execute("DELETE FROM profiles WHERE id = ?", (profile_id,)).rowcount
+        if not deleted:
+            raise KeyError(profile_id)
+        return [str(row["reference_path"]) for row in rows if str(row["reference_path"])]

@@ -39,6 +39,7 @@ func SetupRouter(r *gin.Engine) {
 		// the server rejects later steps until the preceding review is approved.
 		api.POST("/v1/jobs/subtitle/stages/source", hdl.StartWorkflowSource)
 		api.GET("/v1/jobs/subtitle/:taskId/workflow", hdl.GetWorkflow)
+		api.DELETE("/v1/jobs/subtitle/:taskId/workflow", hdl.DeleteWorkflow)
 		api.PUT("/v1/jobs/subtitle/:taskId/subtitles/:kind", hdl.UpdateWorkflowSubtitle)
 		api.POST("/v1/jobs/subtitle/:taskId/source/approve", hdl.ApproveWorkflowSource)
 		api.POST("/v1/jobs/subtitle/:taskId/translation", hdl.StartWorkflowTranslation)

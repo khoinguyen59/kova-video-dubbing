@@ -7,9 +7,14 @@ from io import BytesIO
 import os
 from pathlib import Path
 import re
+import secrets
+import subprocess
+import sys
+import tempfile
+from threading import Lock
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -40,6 +45,8 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     store = ProfileStore(path)
     app = FastAPI(title="KOVA Voice Studio", version="1.0.0")
     app.state.profile_store = store
+    pairing_lock = Lock()
+    pairing_claimed = False
 
     def require_token(request: Request) -> None:
         expected = os.environ.get("KOVA_VOICE_API_TOKEN", "").strip()
@@ -74,7 +81,27 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
             "reference_audio_max_seconds": MAX_REFERENCE_SECONDS,
             "sample_rate_hz": 24000,
             "formats": ["wav", "mp3", "flac"],
+            "reference_vocal_separation": os.environ.get("KOVA_VOICE_SEPARATE_REFERENCE", "") == "1",
         }
+
+    @app.get("/v1/pairing/{code}")
+    def claim_desktop_pairing(code: str) -> dict[str, str]:
+        """Exchange a one-time notebook code for the in-memory bearer token.
+
+        The custom protocol URL contains the public worker URL and this opaque
+        code, never the bearer token. A code can be claimed once only, so it
+        cannot be replayed from browser history after the desktop receives it.
+        """
+        nonlocal pairing_claimed
+        expected_code = os.environ.get("KOVA_VOICE_PAIR_CODE", "")
+        token = os.environ.get("KOVA_VOICE_API_TOKEN", "")
+        if not expected_code or not token or not secrets.compare_digest(code, expected_code):
+            raise HTTPException(status_code=404, detail="pairing link is invalid or expired")
+        with pairing_lock:
+            if pairing_claimed:
+                raise HTTPException(status_code=410, detail="pairing link was already used")
+            pairing_claimed = True
+        return {"token": token}
 
     @app.get("/v1/profiles", dependencies=[Depends(require_token)])
     def profiles() -> list[dict[str, object]]:
@@ -87,6 +114,45 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         if profile is None or version is None:
             raise HTTPException(status_code=404, detail="voice profile was not found")
         return {"profile": profile.__dict__, "version": safe_version(version)}
+
+    @app.get("/v1/profiles/{profile_id}/reference", dependencies=[Depends(require_token)])
+    def profile_reference(profile_id: str) -> FileResponse:
+        """Return the consented reference only to the authenticated owner.
+
+        KOVA uses this endpoint once to back up a profile created by an older
+        desktop build. The worker never exposes reference paths in JSON.
+        """
+        profile = store.get_profile(profile_id)
+        version = store.latest_version(profile_id)
+        if profile is None or version is None:
+            raise HTTPException(status_code=404, detail="voice profile was not found")
+        reference_path = Path(version.reference_path)
+        if not version.reference_path or not reference_path.is_file():
+            raise HTTPException(status_code=404, detail="profile reference audio is unavailable")
+        return FileResponse(
+            path=reference_path,
+            filename=version.reference_filename,
+            media_type="application/octet-stream",
+        )
+
+    @app.delete("/v1/profiles/{profile_id}", dependencies=[Depends(require_token)])
+    def delete_profile(profile_id: str) -> dict[str, object]:
+        try:
+            references = store.delete_profile(profile_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="voice profile was not found") from error
+        for reference in references:
+            reference_path = Path(reference)
+            try:
+                if reference_path.is_file():
+                    reference_path.unlink()
+                parent = reference_path.parent
+                # Only remove folders below the worker's own references root.
+                if parent.name and parent.parent.name == "references":
+                    parent.rmdir()
+            except OSError:
+                pass
+        return {"deleted": True, "id": profile_id}
 
     @app.post("/v1/profiles", status_code=201, dependencies=[Depends(require_token)])
     def create_profile_json(request: CreateProfileRequest) -> dict[str, object]:
@@ -112,17 +178,25 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         blob = await ref_audio.read(MAX_REFERENCE_BYTES + 1)
         if not blob or len(blob) > MAX_REFERENCE_BYTES:
             raise HTTPException(status_code=413, detail="reference audio is empty or exceeds the upload limit")
-        duration_seconds = reference_duration_seconds(blob)
+        # The notebook's CUDA Demucs pass removes music before OmniVoice ever
+        # receives or stores a profile reference.  Refusing a failed split is
+        # intentional: silently cloning a mixed song would make the profile
+        # reproduce accompaniment in every later utterance.
+        try:
+            clean_blob, clean_filename = vocal_only_reference(blob, safe_name, path.parent)
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        duration_seconds = reference_duration_seconds(clean_blob)
         if duration_seconds < MIN_REFERENCE_SECONDS or duration_seconds > MAX_REFERENCE_SECONDS:
             raise HTTPException(
                 status_code=422,
                 detail=f"reference audio must be between {MIN_REFERENCE_SECONDS:g} and {MAX_REFERENCE_SECONDS:g} seconds",
             )
-        digest = hashlib.sha256(blob).hexdigest()
+        digest = hashlib.sha256(clean_blob).hexdigest()
         profile, version = store.create_profile(
             name=name,
             language=language,
-            reference_filename=safe_name,
+            reference_filename=clean_filename,
             reference_sha256=digest,
             consent=True,
             reference_path="",
@@ -130,15 +204,22 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
             engine="omnivoice",
             engine_version=os.environ.get("KOVA_OMNIVOICE_MODEL", "k2-fsa/OmniVoice"),
         )
-        reference_path = path.parent / "references" / profile.id / version.id / safe_name
+        reference_path = path.parent / "references" / profile.id / version.id / clean_filename
         reference_path.parent.mkdir(parents=True, exist_ok=True)
-        reference_path.write_bytes(blob)
+        reference_path.write_bytes(clean_blob)
         # Reference data remains owned by Voice Studio. Only its opaque profile
         # ID and version are ever returned to KOVA.
         store.set_reference_path(version.id, str(reference_path))
         version = store.latest_version(profile.id)
         assert version is not None
-        return {"id": profile.id, "profile": profile.__dict__, "version": safe_version(version)}
+        profile_payload = profile.__dict__ | {
+            "reference_clean": os.environ.get("KOVA_VOICE_SEPARATE_REFERENCE", "") == "1",
+            # An explicit marker lets the desktop make the safety property
+            # visible: OmniVoice receives the vocal stem, never the uploaded
+            # music mix. This is metadata only; no source audio is exposed.
+            "reference_processing": "demucs_cuda_vocals",
+        }
+        return {"id": profile.id, "profile": profile_payload, "version": safe_version(version)}
 
     @app.get("/v1/voices", dependencies=[Depends(require_token)])
     def voices(status: str = "ready") -> list[dict[str, object]]:
@@ -211,6 +292,42 @@ def reference_duration_seconds(blob: bytes) -> float:
             return float(audio.frames) / float(audio.samplerate)
     except Exception as error:
         raise HTTPException(status_code=422, detail="reference audio cannot be decoded") from error
+
+
+def vocal_only_reference(blob: bytes, filename: str, work_root: Path) -> tuple[bytes, str]:
+    """Return a clean voice stem when the CUDA notebook enabled separation.
+
+    The switch is deliberately opt-in at the worker level so developers can
+    run the lightweight API tests without downloading Demucs. KOVA's shipped
+    Colab notebook sets it to 1 and installs Demucs on its GPU runtime.
+    """
+    if os.environ.get("KOVA_VOICE_SEPARATE_REFERENCE", "") != "1":
+        return blob, filename
+    suffix = Path(filename).suffix.lower() or ".wav"
+    try:
+        with tempfile.TemporaryDirectory(prefix="kova-voice-separate-", dir=work_root) as temporary:
+            root = Path(temporary)
+            input_path = root / ("reference" + suffix)
+            input_path.write_bytes(blob)
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "demucs", "-n", "htdemucs", "--two-stems", "vocals",
+                    "--device", "cuda", "--out", str(root / "out"), str(input_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+            vocals = root / "out" / "htdemucs" / input_path.stem / "vocals.wav"
+            if result.returncode != 0 or not vocals.is_file() or vocals.stat().st_size == 0:
+                detail = (result.stderr or result.stdout or "Demucs did not create vocals.wav")[-2000:]
+                raise RuntimeError("CUDA voice/music separation for the clone reference failed: " + detail)
+            return vocals.read_bytes(), "voice_reference_vocals.wav"
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("CUDA voice/music separation for the clone reference timed out after 5 minutes") from error
+    except OSError as error:
+        raise RuntimeError("cannot start CUDA voice/music separation for the clone reference") from error
 
 
 app = create_app()

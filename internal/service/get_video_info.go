@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go.uber.org/zap"
 	"kova/config"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	"kova/internal/types"
 	"kova/log"
@@ -15,7 +16,7 @@ import (
 
 func (s Service) getVideoInfo(ctx context.Context, stepParam *types.SubtitleTaskStepParam) error {
 	link := stepParam.Link
-	if util.IsYouTubeURL(link) || strings.Contains(link, "bilibili.com") {
+	if util.IsSupportedVideoURL(link) {
 		var (
 			err                error
 			title, description string
@@ -34,6 +35,7 @@ func (s Service) getVideoInfo(ctx context.Context, stepParam *types.SubtitleTask
 			descriptionCmdArgs = append(descriptionCmdArgs, "--ffmpeg-location", storage.FfmpegPath)
 		}
 		cmd := exec.Command(storage.YtdlpPath, titleCmdArgs...)
+		processutil.HideConsole(cmd)
 		var output []byte
 		output, err = cmd.CombinedOutput()
 		if err != nil {
@@ -43,6 +45,7 @@ func (s Service) getVideoInfo(ctx context.Context, stepParam *types.SubtitleTask
 		}
 		title = string(output)
 		cmd = exec.Command(storage.YtdlpPath, descriptionCmdArgs...)
+		processutil.HideConsole(cmd)
 		output, err = cmd.CombinedOutput()
 		if err != nil {
 			log.GetLogger().Error("getVideoInfo yt-dlp error", zap.Any("stepParam", stepParam), zap.String("output", string(output)), zap.Error(err))

@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"kova/config"
+	"kova/internal/deps"
 	"kova/internal/types"
 	"kova/log"
 	"kova/pkg/aliyun"
@@ -175,6 +176,12 @@ func (s *Service) RefreshTTSClient() {
 func (s *Service) ValidateTTSPreflight() error {
 	if s == nil {
 		return fmt.Errorf("KOVA TTS service is unavailable")
+	}
+	// Every provider writes a segment that is measured and later muxed with the
+	// source video. Resolve and execute both tools now, before the worker starts,
+	// rather than discovering an empty ffprobe command after a remote TTS call.
+	if err := deps.EnsureDubbingMediaTools(); err != nil {
+		return fmt.Errorf("KOVA cannot prepare ffmpeg/ffprobe for dubbing: %w", err)
 	}
 	provider := strings.ToLower(strings.TrimSpace(config.Conf.Tts.Provider))
 	switch provider {

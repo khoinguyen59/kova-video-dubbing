@@ -47,13 +47,8 @@ Năm bước nằm ở thanh điều hướng trái của desktop app:
 
 - Tab `06 · CapCut Auto-Builder & OCR` có bố cục desktop ba cột: nguồn/config ở trái, preview kéo logo/vẽ ROI ở giữa, style/OCR/review ở phải.
 - Kova luôn tạo `kova-capcut-draft-spec.json` để kiểm tra trước. File này lưu timeline ảnh/video, voiceover, BGM ngẫu nhiên + loop/ducking, motion, transition, logo, hai track subtitle độc lập và cấu hình style.
-- Muốn tạo Circle/Rectangle Blur Mask thật trong draft CapCut: chọn backend `pycapcut`, cài `pycapcut` vào Python đã cấu hình và chọn **CapCut Draft Root** trong `Cài đặt Kova`. Kova từ chối dùng `capcut-cli` cho project có mask để tránh tạo draft thiếu censor.
-- Visual OCR cũng là một lựa chọn trực tiếp trong **01 · Nguồn video**: nó
-  thay thế speech-to-text, quét vùng subtitle hardcode trong khung hình rồi
-  tạo SRT/script để bạn kiểm tra trước khi dịch. Nó không nghe audio, không
-  dùng Colab và không gửi khung hình đến API OCR. Cần cài Paddle/PaddleOCR và
-  OpenCV trong Python local một lần; KOVA ưu tiên CUDA NVIDIA rồi tự chạy lại
-  cùng ROI trên CPU khi GPU không sẵn sàng.
+- Tab **05 · Chạy và nhận output** có tùy chọn xuất **project CapCut chỉnh sửa được**. Chọn thư mục `CapCut Drafts`, bật xuất project và cài `pycapcut` vào Python đã chọn. KOVA tạo draft thật với video nguồn, audio lồng tiếng, phụ đề gốc/bản dịch và vùng che mờ là các track/lớp riêng; MP4 chỉ là bản xem trước.
+- Tab **01 · Tải video** chỉ tải video/audio để xem trước. Tab **02 · Tạo script, dịch và phụ đề** mới chạy Speech-to-Text và/hoặc Visual OCR, tạo SRT/script để kiểm tra trước khi dịch. OCR hỗ trợ Colab GPU riêng hoặc môi trường PaddleOCR local do người dùng chọn.
 - Live preview cho từng track phụ đề có màu, viền, nền alpha, bóng, căn lề, vị trí dọc và preset. Danh sách font lấy từ font families đã cài trên Windows; tên font được lưu vào Kova draft để kiểm tra/chỉnh tiếp trong CapCut nếu backend ngoài không map được font hệ thống đó.
 
 Xem thêm: [`docs/KOVA_DOCUMENTATION.md`](docs/KOVA_DOCUMENTATION.md).

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"kova/config"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	"kova/internal/types"
 	"kova/log"
@@ -169,6 +170,7 @@ func (s *YouTubeSubtitleService) downloadYouTubeSubtitle(ctx context.Context, re
 			zap.Int("maxAttempts", maxAttempts))
 
 		cmd := exec.Command(storage.YtdlpPath, cmdArgs...)
+		processutil.HideConsole(cmd)
 		output, err := cmd.CombinedOutput()
 
 		if err == nil {

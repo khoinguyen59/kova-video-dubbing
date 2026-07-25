@@ -46,6 +46,13 @@ def test_profile_upload_requires_consent_validates_audio_and_hides_worker_path(t
     detail = client.get(f"/v1/profiles/{body['id']}").json()
     assert detail["profile"]["id"] == body["id"]
     assert "reference_path" not in detail["version"]
+    exported = client.get(f"/v1/profiles/{body['id']}/reference")
+    assert exported.status_code == 200
+    assert exported.content == reference_wav()
+    assert "voice.wav" in exported.headers["content-disposition"]
+    deleted = client.delete(f"/v1/profiles/{body['id']}")
+    assert deleted.status_code == 200
+    assert client.get(f"/v1/profiles/{body['id']}").status_code == 404
 
 
 def test_worker_token_protects_voice_endpoints(monkeypatch, tmp_path):
@@ -53,6 +60,17 @@ def test_worker_token_protects_voice_endpoints(monkeypatch, tmp_path):
     client = TestClient(create_app(tmp_path / "voice.db"))
     assert client.get("/v1/health").status_code == 401
     assert client.get("/v1/health", headers={"Authorization": "Bearer worker-secret"}).status_code == 200
+
+
+def test_colab_pairing_code_is_single_use_and_does_not_need_a_bearer_header(monkeypatch, tmp_path):
+    monkeypatch.setenv("KOVA_VOICE_API_TOKEN", "worker-secret")
+    monkeypatch.setenv("KOVA_VOICE_PAIR_CODE", "x" * 32)
+    client = TestClient(create_app(tmp_path / "voice.db"))
+    first = client.get("/v1/pairing/" + "x" * 32)
+    assert first.status_code == 200
+    assert first.json() == {"token": "worker-secret"}
+    assert client.get("/v1/pairing/" + "x" * 32).status_code == 410
+    assert client.get("/v1/pairing/" + "y" * 32).status_code == 404
 
 
 def test_independent_voice_studio_ui_is_served_without_loading_a_model(tmp_path):

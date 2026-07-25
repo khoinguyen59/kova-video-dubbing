@@ -50,7 +50,11 @@ if ([string]::IsNullOrWhiteSpace($WailsPath)) {
 
 Push-Location $projectRoot
 try {
-    & $WailsPath build -clean -nopackage -webview2 browser -o $outputName
+    # The committed frontend/wailsjs bindings are typechecked by the frontend
+    # build. Skipping regeneration here avoids Wails recursively inspecting the
+    # retired Fyne desktop package, which is unrelated to the KOVA Wails shell
+    # and can stall a production build on Windows.
+    & $WailsPath build -clean -nopackage -webview2 browser -skipbindings -o $outputName
     if ($LASTEXITCODE -ne 0) {
         throw "Wails build failed with exit code $LASTEXITCODE. VERSION was not changed."
     }
@@ -83,9 +87,17 @@ try {
     }
     Copy-Item -LiteralPath $ocrBridge -Destination (Join-Path $portableScripts "kova_visual_ocr.py") -Force
 
-    # A successful build becomes the sole desktop-app executable in build/.
-    Get-ChildItem -LiteralPath $buildRoot -File -Filter 'KOVA-Desktop-*.exe' |
-        Remove-Item -Force
+    # Keep the most recent prior desktop build alongside the new one. This
+    # permits a release while its predecessor is running (Windows locks that
+    # executable), but never leaves more than two release EXEs in build/.
+    # We deliberately never try to delete the newest existing build because it
+    # is the most likely executable to be running.
+    $previousBuilds = Get-ChildItem -LiteralPath $buildRoot -File -Filter 'KOVA-Desktop-*.exe' |
+        Sort-Object Name -Descending
+    $buildsToRemove = @($previousBuilds | Select-Object -Skip 1)
+    foreach ($previousBuild in $buildsToRemove) {
+        Remove-Item -LiteralPath $previousBuild.FullName -Force
+    }
     Move-Item -LiteralPath $builtPath -Destination $outputPath -Force
     Set-Content -LiteralPath $versionPath -Value $nextVersion -NoNewline
     Write-Host "Created $outputPath"

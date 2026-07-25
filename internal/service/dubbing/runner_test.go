@@ -72,6 +72,62 @@ func TestRunWritesDubbingArtifactsWithFakeTTS(t *testing.T) {
 	}
 }
 
+type countingChat struct {
+	calls int
+}
+
+func (c *countingChat) ChatCompletion(string) (string, error) {
+	c.calls++
+	return "This text must never be used", nil
+}
+
+func TestSynthesizeKeepsApprovedTextAndReportsEveryDubbingPhase(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "approved.srt")
+	if err := os.WriteFile(input, []byte("1\n00:00:00,000 --> 00:00:01,000\nApproved Vietnamese text must stay as reviewed.\n\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	chat := &countingChat{}
+	progress := map[string]bool{}
+	cfg := DefaultConfig()
+	// Simulate an old persisted configuration. The desktop runner must still
+	// preserve reviewed content instead of issuing one LLM rewrite per cue.
+	cfg.EnableTextRewrite = true
+	cfg.RewriteMaxAttempts = 2
+	result, err := NewRunner(Dependencies{
+		TTS:         &fakeTTS{writeOnReturn: true},
+		Chat:        chat,
+		Language:    "vi",
+		Voice:       "voice",
+		Workdir:     dir,
+		InputSRT:    input,
+		OutputAudio: filepath.Join(dir, "tts_final_audio.wav"),
+		Config:      cfg,
+		FFmpeg:      fakeRunnerWritingOutputs(dir),
+		Duration: func(string) (float64, error) {
+			return 0.8, nil
+		},
+		Progress: func(phase string, _, _ int, _ string) {
+			progress[phase] = true
+		},
+	}).Synthesize(context.Background())
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if chat.calls != 0 {
+		t.Fatalf("approved SRT invoked %d silent LLM rewrite calls", chat.calls)
+	}
+	if len(result.Plan) != 1 || result.Plan[0].SpokenText != "Approved Vietnamese text must stay as reviewed." {
+		t.Fatalf("approved spoken text changed: %+v", result.Plan)
+	}
+	for _, phase := range []string{"prepare", "synthesize", "fit", "assemble"} {
+		if !progress[phase] {
+			t.Fatalf("missing progress phase %q: %+v", phase, progress)
+		}
+	}
+}
+
 func TestRunWritesCleanedDubbingInput(t *testing.T) {
 	dir := t.TempDir()
 	input := filepath.Join(dir, "input.srt")
@@ -365,5 +421,37 @@ func TestMuxUsesApprovedAudioWithoutTTS(t *testing.T) {
 	}
 	if info, err := os.Stat(output); err != nil || info.Size() == 0 {
 		t.Fatalf("muxed video missing: info=%v err=%v", info, err)
+	}
+}
+
+func TestMuxMixesSeparatedBackgroundBeforeVideoAssembly(t *testing.T) {
+	dir := t.TempDir()
+	video := filepath.Join(dir, "origin.mp4")
+	audio := filepath.Join(dir, "tts_final_audio.wav")
+	background := filepath.Join(dir, "source_background.wav")
+	mixed := filepath.Join(dir, "tts_with_background.wav")
+	output := filepath.Join(dir, "video_with_tts.mp4")
+	for path, data := range map[string]string{video: "video", audio: "voice", background: "music"} {
+		if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls [][]string
+	got, err := NewRunner(Dependencies{
+		Workdir: dir, InputVideo: video, OutputAudio: audio, OutputVideo: output,
+		BackgroundAudio: background, OutputMixedAudio: mixed,
+		FFmpeg: func(args []string) error {
+			calls = append(calls, append([]string(nil), args...))
+			return os.WriteFile(args[len(args)-1], []byte("media"), 0644)
+		},
+	}).Mux()
+	if err != nil {
+		t.Fatalf("Mux() error = %v", err)
+	}
+	if got != output || len(calls) != 2 {
+		t.Fatalf("Mux() = %q with %d ffmpeg calls, want output and two calls", got, len(calls))
+	}
+	if !strings.Contains(strings.Join(calls[0], " "), "source_background.wav") || !strings.Contains(strings.Join(calls[1], " "), "tts_with_background.wav") {
+		t.Fatalf("mux calls did not mix the separated background then use mixed audio: %#v", calls)
 	}
 }
