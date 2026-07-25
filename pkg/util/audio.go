@@ -2,6 +2,7 @@ package util
 
 import (
 	"go.uber.org/zap"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	"kova/log"
 	"os/exec"
@@ -14,6 +15,7 @@ func ProcessAudio(filePath string) (string, error) {
 	dest := strings.ReplaceAll(filePath, filepath.Ext(filePath), "_mono_16K.mp3")
 	cmdArgs := []string{"-i", filePath, "-ac", "1", "-ar", "16000", "-b:a", "192k", dest}
 	cmd := exec.Command(storage.FfmpegPath, cmdArgs...)
+	processutil.HideConsole(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.GetLogger().Error("处理音频失败", zap.Error(err), zap.String("audio file", filePath), zap.String("output", string(output)))

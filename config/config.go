@@ -81,8 +81,12 @@ type AliyunTranscribeConfig struct {
 }
 
 type Transcribe struct {
-	Provider              string                 `toml:"provider"`
-	EnableGpuAcceleration bool                   `toml:"enable_gpu_acceleration"`
+	Provider              string `toml:"provider"`
+	EnableGpuAcceleration bool   `toml:"enable_gpu_acceleration"`
+	// RemoteAudioSeparation is session-only. It is enabled solely by KOVA's
+	// authenticated CUDA Colab STT worker, which exposes Demucs stems beside
+	// transcription. Never persist a tunnel capability as a user setting.
+	RemoteAudioSeparation bool                   `toml:"-"`
 	Openai                OpenaiCompatibleConfig `toml:"openai"`
 	Fasterwhisper         LocalModelConfig       `toml:"fasterwhisper"`
 	Whisperkit            LocalModelConfig       `toml:"whisperkit"`
@@ -262,9 +266,11 @@ var Conf = Config{
 		SpeedMin:            0.95,
 		SpeedAccept:         1.08,
 		SpeedMax:            1.12,
-		EnableTextRewrite:   true,
-		RewriteMaxAttempts:  2,
-		Estimator:           "statistical",
+		// Timed text is reviewed before dubbing. Do not silently rewrite it with
+		// another model during speech synthesis; surface timing warnings instead.
+		EnableTextRewrite:  false,
+		RewriteMaxAttempts: 0,
+		Estimator:          "statistical",
 	},
 	Image: Image{
 		Provider: "openai-compatible",
@@ -332,6 +338,7 @@ func ConfigureRemoteColabTranscription(rawURL, token, model string) error {
 		model = "medium"
 	}
 	Conf.Transcribe.Provider = "openai"
+	Conf.Transcribe.RemoteAudioSeparation = true
 	Conf.Transcribe.Openai.BaseUrl = endpoint + "/v1"
 	Conf.Transcribe.Openai.SessionAPIKey = strings.TrimSpace(token)
 	Conf.Transcribe.Openai.Model = model

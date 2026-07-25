@@ -5,27 +5,29 @@ Vietnamese/English; the optional local HTTP page is only a diagnostic surface.
 
 ## Main workflow / Luồng chính
 
-1. **Video source / Nguồn video** — select local media or a public URL, then
-   choose timed **Speech-to-text** or **Visual OCR** of visible hardcoded
-   captions. Both produce the same editable source SRT/script review gate.
-2. **Translation / Dịch và phụ đề** — use the KOVA API Gateway free-model
-   dropdown; edit and approve the translated SRT.
+1. **Download video / Tải video** — select local media or a public URL. This
+   stage downloads only video and audio for preview, then pauses for approval.
+2. **Create script, translation and subtitles / Tạo script, dịch và phụ đề**
+   — choose timed **Speech-to-text**, **Visual OCR**, or both from the approved
+   source. Then use the KOVA API Gateway free-model dropdown; edit and approve
+   the translated SRT.
 3. **Fixed voice / Giọng lồng tiếng cố định** — choose one TTS engine and one
    approved profile/reference for the complete job. OmniVoice runs on the
    configured remote Colab GPU worker; Google/Edge are selectable Gateway TTS
    preset voices, not voice clones.
 4. **Video output / Xuất hình** — configure output and explicitly start the
    final render only after audio review.
-5. **CapCut Auto-Builder & Visual OCR** — optionally build a reviewable Kova
-   CapCut specification, extract hard subtitles locally, and compile a CapCut
-   draft after the user has configured an external compiler.
+5. **Output / Chạy và nhận output** — render the preview MP4 and, when the
+   user has enabled it, compile an editable native CapCut draft with separate
+   video, audio, source-subtitle and translated-subtitle tracks.
 
 ## Auto-Builder and CapCut
 
-Kova always writes `kova-capcut-draft-spec.json` first. It contains local media
-references, random seed, audio/BGM timeline, motion keys, independent source
-and target subtitle tracks, subtitle styles, watermark placement and mask
-metadata. Review this file before enabling compilation.
+Kova always writes `kova-capcut-draft-spec.json` first, then compiles the same
+approved specification into a native CapCut draft when direct draft export is
+enabled in the Output tab. It contains local media references, random seed,
+audio/BGM timeline, motion keys, independent source and target subtitle tracks,
+subtitle styles, watermark placement and mask metadata.
 
 - Use **pycapcut** when a project contains Circle/Rectangle Blur Masks. Set
   `creator.capcut_draft_root` to an existing CapCut Draft directory and install

@@ -32,14 +32,35 @@ class Cue:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Kova offline visual subtitle OCR")
-    parser.add_argument("--input", required=True, help="input video path")
-    parser.add_argument("--output", required=True, help="output SRT path")
-    parser.add_argument("--roi", required=True, help="x,y,width,height normalized to 0..1")
+    parser.add_argument("--preflight", action="store_true", help="verify Python OCR dependencies without loading a model")
+    parser.add_argument("--input", help="input video path")
+    parser.add_argument("--output", help="output SRT path")
+    parser.add_argument("--roi", help="x,y,width,height normalized to 0..1")
     parser.add_argument("--lang", default="en", help="PaddleOCR language")
     parser.add_argument("--device", choices=("gpu", "cpu"), default="cpu")
     parser.add_argument("--interval-ms", type=int, default=250)
     parser.add_argument("--merge-gap-ms", type=int, default=450)
     return parser.parse_args()
+
+
+def preflight() -> int:
+    """Validate imports only; do not instantiate PaddleOCR or download models."""
+    import cv2  # noqa: F401
+    import paddle
+    from paddleocr import PaddleOCR  # noqa: F401
+
+    cuda_available = bool(paddle.is_compiled_with_cuda())
+    print(
+        json.dumps(
+            {
+                "ready": True,
+                "cuda_available": cuda_available,
+                "python": sys.executable,
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
 
 
 def parse_roi(raw: str) -> tuple[float, float, float, float]:
@@ -165,6 +186,10 @@ def write_srt(path: Path, cues: list[Cue]) -> None:
 
 def main() -> int:
     args = parse_args()
+    if args.preflight:
+        return preflight()
+    if not args.input or not args.output or not args.roi:
+        raise ValueError("--input, --output and --roi are required unless --preflight is used")
     roi = parse_roi(args.roi)
     input_path = Path(args.input).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()

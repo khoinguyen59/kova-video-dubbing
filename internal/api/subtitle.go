@@ -17,8 +17,8 @@ type SubtitleTask struct {
 	TTS                     int      `json:"tts"`
 	TTSVoiceCode            string   `json:"tts_voice_code,omitempty"`
 	TTSVoiceCloneSrcFileURL string   `json:"tts_voice_clone_src_file_url,omitempty"`
-	VoiceCloneConsent        bool     `json:"voice_clone_consent"`
-	VttSwitch                bool     `json:"vtt_switch"`
+	VoiceCloneConsent       bool     `json:"voice_clone_consent"`
+	VttSwitch               bool     `json:"vtt_switch"`
 	ModalFilter             int      `json:"modal_filter"`
 	Replace                 []string `json:"replace,omitempty"`
 	ProtectTerms            []string `json:"protect_terms,omitempty"`

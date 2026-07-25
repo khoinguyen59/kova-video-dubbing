@@ -21,6 +21,12 @@ type durationAwareFakeTTS struct {
 	durations []float64
 }
 
+type oneAttemptFakeTTS struct {
+	fakeTTS
+}
+
+func (f *oneAttemptFakeTTS) TTSMaxAttempts() int { return 1 }
+
 func (f *durationAwareFakeTTS) Text2SpeechWithDuration(text, voice, outputFile string, duration float64) error {
 	f.durations = append(f.durations, duration)
 	return f.Text2Speech(text, voice, outputFile)
@@ -77,6 +83,17 @@ func TestRetryTTSRejectsNonPositiveAttempts(t *testing.T) {
 	err := retryTTS(&fakeTTS{}, "hello", "voice", filepath.Join(t.TempDir(), "out.wav"), 0)
 	if err == nil || !strings.Contains(err.Error(), "attempts must be > 0") {
 		t.Fatalf("retryTTS() error = %v, want attempts validation", err)
+	}
+}
+
+func TestRetryTTSHonoursProviderFastFailLimit(t *testing.T) {
+	tts := &oneAttemptFakeTTS{fakeTTS: fakeTTS{failures: 99}}
+	err := retryTTS(tts, "hello", "voice", filepath.Join(t.TempDir(), "out.wav"), 3)
+	if err == nil {
+		t.Fatal("retryTTS() error = nil, want TTS failure")
+	}
+	if tts.calls != 1 {
+		t.Fatalf("provider fast-fail calls = %d, want 1", tts.calls)
 	}
 }
 

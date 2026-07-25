@@ -144,6 +144,29 @@ func (s *Store) Snapshot(ctx context.Context, projectID string) (Snapshot, error
 	return Snapshot{Project: project, StageRuns: runs, Artifacts: artifacts}, nil
 }
 
+// DeleteProject removes a project timeline and every stage/artifact record
+// belonging to it. The foreign-key cascade is intentional: a user deleting a
+// KOVA project expects a clean, independent test run rather than hidden old
+// stage state affecting a new project with the same source URL.
+func (s *Store) DeleteProject(ctx context.Context, projectID string) error {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return ErrProjectNotFound
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := requireProject(ctx, tx, projectID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, projectID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) StartStage(ctx context.Context, projectID string, stage Stage) (StageRun, error) {
 	if !knownStage(stage) {
 		return StageRun{}, ErrInvalidStage
@@ -213,6 +236,32 @@ func (s *Store) SetWorkflowTaskID(ctx context.Context, projectID, workflowTaskID
 
 func (s *Store) ApproveStage(ctx context.Context, runID string) (StageRun, error) {
 	return s.transition(ctx, runID, StatusReviewNeeded, StatusApproved, "stage.approved", "")
+}
+
+// AutoApproveStage is used only when a project was explicitly started in
+// auto-review mode. It accepts either a running or review-required run so a
+// service-side automatic approval and a desktop refresh cannot race.
+func (s *Store) AutoApproveStage(ctx context.Context, runID string) (StageRun, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return StageRun{}, ErrInvalidTransition
+	}
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE stage_runs
+		SET status = ?, message_key = ?, failure_code = '', updated_at = ?
+		WHERE id = ? AND status IN (?, ?)`,
+		StatusApproved, "stage.auto_approved", timestamp(now), runID, StatusRunning, StatusReviewNeeded)
+	if err != nil {
+		return StageRun{}, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return StageRun{}, err
+	}
+	if count != 1 {
+		return StageRun{}, ErrInvalidTransition
+	}
+	return s.run(ctx, runID)
 }
 
 func (s *Store) FailStage(ctx context.Context, runID, failureCode string) (StageRun, error) {

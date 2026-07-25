@@ -49,7 +49,97 @@ type Result struct {
 	FallbackToCPU bool   `json:"fallback_to_cpu"`
 }
 
+// PreflightResult describes whether the selected Python environment can load
+// the bridge dependencies. It intentionally does not initialize PaddleOCR, so
+// it cannot download model files or consume GPU memory.
+type PreflightResult struct {
+	Ready         bool   `json:"ready"`
+	CUDAAvailable bool   `json:"cuda_available"`
+	Python        string `json:"python"`
+}
+
 type Runner struct{ Config Config }
+
+// InstallDependencies installs the CPU-capable Python packages required by
+// the local OCR bridge. It is intentionally opt-in: downloading PaddleOCR is
+// substantial, so KOVA only performs it after a user presses the install
+// control in the source stage.
+func (r Runner) InstallDependencies(parent context.Context) (PreflightResult, error) {
+	python, _, err := r.resolveBridge()
+	if err != nil {
+		return PreflightResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(parent, 20*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, python,
+		"-m", "pip", "install", "--disable-pip-version-check", "--upgrade",
+		"opencv-python-headless", "paddlepaddle", "paddleocr",
+	)
+	output, err := command.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return PreflightResult{}, errors.New("cài OCR local vượt quá 20 phút; hãy kiểm tra Python/pip và thử lại")
+	}
+	if err != nil {
+		return PreflightResult{}, fmt.Errorf("không thể cài OpenCV/Paddle/PaddleOCR: %w\n%s", err, trimLog(string(output)))
+	}
+	return r.Preflight(parent)
+}
+
+func (r Runner) resolveBridge() (python, script string, err error) {
+	python = strings.TrimSpace(r.Config.PythonPath)
+	if python == "" {
+		python = "python"
+	}
+	script = strings.TrimSpace(r.Config.ScriptPath)
+	if script == "" {
+		script = filepath.Join("scripts", "kova_visual_ocr.py")
+	}
+
+	candidates := []string{script}
+	if !filepath.IsAbs(script) {
+		if executable, executableErr := os.Executable(); executableErr == nil {
+			base := filepath.Base(script)
+			candidates = append(candidates,
+				filepath.Join(filepath.Dir(executable), script),
+				filepath.Join(filepath.Dir(executable), "scripts", base),
+			)
+		}
+	}
+	for _, candidate := range candidates {
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && !info.IsDir() {
+			return python, candidate, nil
+		}
+	}
+	return "", "", fmt.Errorf("OCR bridge is missing: %q", script)
+}
+
+// Preflight verifies the Python runtime and package imports before a source
+// video is downloaded. It is deliberately a short, dependency-only check:
+// the actual OCR model is constructed later in the visible OCR phase.
+func (r Runner) Preflight(parent context.Context) (PreflightResult, error) {
+	python, script, err := r.resolveBridge()
+	if err != nil {
+		return PreflightResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(parent, 40*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, python, script, "--preflight").CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return PreflightResult{}, errors.New("OCR bridge preflight exceeded 40 seconds")
+	}
+	if err != nil {
+		return PreflightResult{}, fmt.Errorf("cannot load OpenCV/Paddle/PaddleOCR: %w\n%s", err, trimLog(string(output)))
+	}
+	result, err := decodePreflightResult(string(output))
+	if err != nil {
+		return PreflightResult{}, fmt.Errorf("OCR bridge preflight returned invalid data: %w\n%s", err, trimLog(string(output)))
+	}
+	if !result.Ready {
+		return PreflightResult{}, errors.New("OCR bridge reported not ready")
+	}
+	return result, nil
+}
 
 func (r Runner) Extract(ctx context.Context, request Request) (Result, error) {
 	if err := validateRequest(request); err != nil {
@@ -62,6 +152,16 @@ func (r Runner) Extract(ctx context.Context, request Request) (Result, error) {
 	script := strings.TrimSpace(r.Config.ScriptPath)
 	if script == "" {
 		script = filepath.Join("scripts", "kova_visual_ocr.py")
+	}
+	if !filepath.IsAbs(script) {
+		if _, statErr := os.Stat(script); os.IsNotExist(statErr) {
+			if executable, executableErr := os.Executable(); executableErr == nil {
+				portableScript := filepath.Join(filepath.Dir(executable), "scripts", filepath.Base(script))
+				if info, portableErr := os.Stat(portableScript); portableErr == nil && !info.IsDir() {
+					script = portableScript
+				}
+			}
+		}
 	}
 	if info, err := os.Stat(script); err != nil || info.IsDir() {
 		return Result{}, fmt.Errorf("không tìm thấy OCR bridge %q; cài PaddleOCR rồi chọn script này trong Cài đặt Kova", script)
@@ -160,6 +260,21 @@ func decodeResult(log string) (Result, error) {
 		}
 	}
 	return Result{}, errors.New("OCR bridge không trả JSON kết quả")
+}
+
+func decodePreflightResult(log string) (PreflightResult, error) {
+	lines := strings.Split(strings.ReplaceAll(log, "\r\n", "\n"), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+			continue
+		}
+		var result PreflightResult
+		if err := json.Unmarshal([]byte(line), &result); err == nil {
+			return result, nil
+		}
+	}
+	return PreflightResult{}, errors.New("OCR bridge did not return preflight JSON")
 }
 
 func trimLog(log string) string {

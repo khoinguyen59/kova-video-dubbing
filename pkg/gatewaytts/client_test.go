@@ -89,3 +89,36 @@ func TestText2SpeechRejectsInvalidConfigBeforeOutput(t *testing.T) {
 		t.Fatalf("output should not exist: %v", err)
 	}
 }
+
+func TestGatewayClientFastFailsAtOneAttempt(t *testing.T) {
+	client := NewClient("https://gateway.example", "key", "edge-tts", "")
+	if got := client.TTSMaxAttempts(); got != 1 {
+		t.Fatalf("TTSMaxAttempts() = %d, want 1", got)
+	}
+}
+
+func TestText2SpeechRetriesTransientGatewayFailureWithoutRunnerRetry(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"temporary upstream failure"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("ID3-recovered"))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "recovered.mp3")
+	if err := NewClient(server.URL, "key", "google-tts/vi", "").Text2Speech("Xin chào", "auto", output); err != nil {
+		t.Fatalf("Text2Speech() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("gateway attempts = %d, want 2", attempts)
+	}
+	if audio, err := os.ReadFile(output); err != nil || string(audio) != "ID3-recovered" {
+		t.Fatalf("output = %q err=%v", audio, err)
+	}
+}

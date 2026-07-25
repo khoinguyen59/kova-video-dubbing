@@ -20,6 +20,7 @@ import (
 
 type Translator struct {
 	chatCompleter types.ChatCompleter
+	batchProgress func(completed, total int)
 }
 
 var (
@@ -780,6 +781,18 @@ func isSentenceEnding(text string) bool {
 
 // BatchTranslateSrtBlocks 批量翻译SRT字幕块（智能分组：按完整句子分组，最多10个块）
 func (t *Translator) BatchTranslateSrtBlocks(blocks []*util.SrtBlock, originLang, targetLang string, taskPtr *types.SubtitleTask) error {
+	return t.batchTranslateSrtBlocks(blocks, originLang, targetLang, taskPtr, nil)
+}
+
+// BatchTranslateSrtBlocksWithProgress keeps the existing translator behavior
+// while exposing completed batch counts to the staged desktop workflow.  The
+// callback is request-scoped, so concurrent tasks cannot overwrite progress
+// handlers on the shared Translator instance.
+func (t *Translator) BatchTranslateSrtBlocksWithProgress(blocks []*util.SrtBlock, originLang, targetLang string, taskPtr *types.SubtitleTask, progress func(completed, total int)) error {
+	return t.batchTranslateSrtBlocks(blocks, originLang, targetLang, taskPtr, progress)
+}
+
+func (t *Translator) batchTranslateSrtBlocks(blocks []*util.SrtBlock, originLang, targetLang string, taskPtr *types.SubtitleTask, progress func(completed, total int)) error {
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -941,6 +954,9 @@ func (t *Translator) BatchTranslateSrtBlocks(blocks []*util.SrtBlock, originLang
 		}
 
 		if len(originTexts) == 0 {
+			if progress != nil {
+				progress(currentBatchNum, totalBatches)
+			}
 			continue
 		}
 
@@ -987,6 +1003,9 @@ func (t *Translator) BatchTranslateSrtBlocks(blocks []*util.SrtBlock, originLang
 				progress := float64(currentBatchNum) / float64(totalBatches)
 				taskPtr.ProcessPct = 40 + uint8(progress*50)
 			}
+			if progress != nil {
+				progress(currentBatchNum, totalBatches)
+			}
 			continue
 		}
 
@@ -1010,6 +1029,9 @@ func (t *Translator) BatchTranslateSrtBlocks(blocks []*util.SrtBlock, originLang
 			progress := float64(currentBatchNum) / float64(totalBatches)
 			// 假设翻译在40%-90%之间
 			taskPtr.ProcessPct = 40 + uint8(progress*50)
+		}
+		if progress != nil {
+			progress(currentBatchNum, totalBatches)
 		}
 	}
 

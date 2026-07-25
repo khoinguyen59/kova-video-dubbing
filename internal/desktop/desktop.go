@@ -1,3 +1,5 @@
+//go:build legacy_fyne
+
 package desktop
 
 import (
@@ -92,8 +94,8 @@ func Show() {
 	pages := append(workflow.Pages, CreateCreatorStudioPage(myWindow), CreateLlmTab(), CreateConfigTab(myWindow))
 
 	navItemsVI := []string{
-		"01 · Nguồn video",
-		"02 · Dịch và phụ đề",
+		"01 · Tải video",
+		"02 · Tạo script, dịch và phụ đề",
 		"03 · Giọng lồng tiếng cố định",
 		"04 · Xuất hình và tinh chỉnh",
 		"05 · Chạy và nhận output",

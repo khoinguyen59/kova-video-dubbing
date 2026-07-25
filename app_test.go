@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -85,6 +87,297 @@ func TestCheckVoiceHealthUsesBearerTokenWithoutEchoingIt(t *testing.T) {
 	}
 }
 
+func TestCreateVoiceProfileUploadsConsentedReferenceWithoutLeakingPath(t *testing.T) {
+	referencePath := filepath.Join(t.TempDir(), "narrator.mp3")
+	if err := os.WriteFile(referencePath, []byte("voice-reference-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/profiles" || request.Method != http.MethodPost {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer private-worker-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if err := request.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("ParseMultipartForm: %v", err)
+		}
+		if request.FormValue("name") != "Narrator" || request.FormValue("consent_confirmed") != "true" || request.FormValue("language") != "vi" {
+			t.Fatalf("profile fields name=%q consent=%q language=%q", request.FormValue("name"), request.FormValue("consent_confirmed"), request.FormValue("language"))
+		}
+		file, header, err := request.FormFile("ref_audio")
+		if err != nil {
+			t.Fatalf("FormFile: %v", err)
+		}
+		defer file.Close()
+		body, _ := io.ReadAll(file)
+		if header.Filename != "narrator.mp3" || string(body) != "voice-reference-bytes" {
+			t.Fatalf("audio filename=%q body=%q", header.Filename, body)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"voice-123","profile":{"id":"voice-123","name":"Narrator","language":"vi","status":"ready"}}`))
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.httpClient = server.Client()
+	app.projectDataRoot = t.TempDir()
+	created, err := app.CreateVoiceProfile(VoiceProfileCreateRequest{
+		BaseURL:            server.URL,
+		Token:              "private-worker-token",
+		Name:               "Narrator",
+		ReferenceAudioPath: referencePath,
+		Language:           "vi",
+		ConsentConfirmed:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateVoiceProfile() error = %v", err)
+	}
+	if created.ID != "voice-123" || created.Name != "Narrator" || created.Status != "ready" || !created.Saved || !created.BackupAvailable {
+		t.Fatalf("created profile = %#v", created)
+	}
+	manifest, err := os.ReadFile(filepath.Join(app.projectDataRoot, "voice-library", "profiles.json"))
+	if err != nil {
+		t.Fatalf("read saved voice library: %v", err)
+	}
+	if strings.Contains(string(manifest), "private-worker-token") || !strings.Contains(string(manifest), "voice-123") {
+		t.Fatalf("voice library metadata is incorrect or leaked the token: %s", manifest)
+	}
+	backup, err := os.ReadFile(filepath.Join(app.projectDataRoot, "voice-library", "references", "voice-123.mp3"))
+	if err != nil || string(backup) != "voice-reference-bytes" {
+		t.Fatalf("voice backup = %q, error = %v", backup, err)
+	}
+}
+
+func TestVoiceLibraryKeepsBackedUpProfileAfterAppRestart(t *testing.T) {
+	root := t.TempDir()
+	referencePath := filepath.Join(root, "reference.flac")
+	if err := os.WriteFile(referencePath, []byte("consented-reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := NewApp()
+	first.projectDataRoot = root
+	if _, err := first.saveVoiceProfileBackup(VoiceProfile{ID: "stable-voice", Name: "Narrator", Language: "vi", Status: "ready"}, "https://voice.example.test", referencePath); err != nil {
+		t.Fatalf("saveVoiceProfileBackup() error = %v", err)
+	}
+
+	second := NewApp()
+	second.projectDataRoot = root
+	profiles, err := second.ListVoiceProfiles(VoiceHealthRequest{})
+	if err != nil {
+		t.Fatalf("ListVoiceProfiles(offline) error = %v", err)
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("saved profiles = %#v, want one profile", profiles)
+	}
+	profile := profiles[0]
+	if profile.ID != "stable-voice" || profile.Name != "Narrator" || !profile.Saved || !profile.BackupAvailable || profile.WorkerURL != "https://voice.example.test" {
+		t.Fatalf("restored profile = %#v", profile)
+	}
+}
+
+func TestPreviewVoiceProfileRestoresSavedProfileAndReturnsAudio(t *testing.T) {
+	root := t.TempDir()
+	referencePath := filepath.Join(root, "reference.wav")
+	if err := os.WriteFile(referencePath, []byte("consented-reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer current-colab-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch request.URL.Path {
+		case "/v1/voices":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`[{"id":"stable-voice","name":"Narrator","language":"vi","status":"ready"}]`))
+		case "/generate":
+			if err := request.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			if got := request.FormValue("profile_id"); got != "stable-voice" {
+				t.Fatalf("profile_id = %q", got)
+			}
+			if got := request.FormValue("text"); got != voicePreviewText {
+				t.Fatalf("preview text = %q", got)
+			}
+			writer.Header().Set("Content-Type", "audio/wav")
+			_, _ = writer.Write([]byte("RIFFpreview"))
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.projectDataRoot = root
+	app.httpClient = server.Client()
+	if _, err := app.saveVoiceProfileBackup(VoiceProfile{ID: "stable-voice", Name: "Narrator", Language: "vi", Status: "ready"}, server.URL, referencePath); err != nil {
+		t.Fatalf("saveVoiceProfileBackup() error = %v", err)
+	}
+	preview, err := app.PreviewVoiceProfile(VoicePreviewRequest{BaseURL: server.URL, Token: "current-colab-token", ProfileID: "stable-voice", Language: "vi"})
+	if err != nil {
+		t.Fatalf("PreviewVoiceProfile() error = %v", err)
+	}
+	if preview.ProfileID != "stable-voice" || !strings.HasPrefix(preview.DataURL, "data:audio/wav;base64,") {
+		t.Fatalf("preview = %#v", preview)
+	}
+}
+
+func TestDeleteVoiceProfileRemovesWorkerAndPrivateBackup(t *testing.T) {
+	root := t.TempDir()
+	referencePath := filepath.Join(root, "reference.flac")
+	if err := os.WriteFile(referencePath, []byte("consented-reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deletedRemotely := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodDelete || request.URL.Path != "/v1/profiles/stable-voice" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer current-colab-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		deletedRemotely = true
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.projectDataRoot = root
+	app.httpClient = server.Client()
+	if _, err := app.saveVoiceProfileBackup(VoiceProfile{ID: "stable-voice", Name: "Narrator", Language: "vi", Status: "ready"}, server.URL, referencePath); err != nil {
+		t.Fatalf("saveVoiceProfileBackup() error = %v", err)
+	}
+	if err := app.DeleteVoiceProfile(VoiceProfileDeleteRequest{BaseURL: server.URL, Token: "current-colab-token", ProfileID: "stable-voice"}); err != nil {
+		t.Fatalf("DeleteVoiceProfile() error = %v", err)
+	}
+	if !deletedRemotely {
+		t.Fatal("expected remote profile deletion")
+	}
+	profiles, err := app.ListVoiceProfiles(VoiceHealthRequest{})
+	if err != nil || len(profiles) != 0 {
+		t.Fatalf("profiles after delete = %#v, error = %v", profiles, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "voice-library", "references", "stable-voice.flac")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("saved reference still exists, error = %v", err)
+	}
+}
+
+func TestVoiceLibraryRestoresProfileWhenColabHasReset(t *testing.T) {
+	root := t.TempDir()
+	referencePath := filepath.Join(root, "reference.wav")
+	if err := os.WriteFile(referencePath, []byte("consented-reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var uploaded bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer current-colab-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch request.URL.Path {
+		case "/v1/voices":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`[]`))
+		case "/profiles":
+			uploaded = true
+			if err := request.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			file, _, err := request.FormFile("ref_audio")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			body, _ := io.ReadAll(file)
+			if string(body) != "consented-reference" {
+				t.Fatalf("restored audio = %q", body)
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"remote-new","profile":{"id":"remote-new","name":"Narrator","language":"vi","status":"ready"}}`))
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.projectDataRoot = root
+	app.httpClient = server.Client()
+	if _, err := app.saveVoiceProfileBackup(VoiceProfile{ID: "stable-voice", Name: "Narrator", Language: "vi", Status: "ready"}, server.URL, referencePath); err != nil {
+		t.Fatalf("saveVoiceProfileBackup() error = %v", err)
+	}
+	remoteID, err := app.ensureVoiceProfileOnWorker("stable-voice", server.URL, "current-colab-token")
+	if err != nil {
+		t.Fatalf("ensureVoiceProfileOnWorker() error = %v", err)
+	}
+	if remoteID != "remote-new" || !uploaded {
+		t.Fatalf("restored remote id = %q, uploaded = %v", remoteID, uploaded)
+	}
+	manifest, err := os.ReadFile(filepath.Join(root, "voice-library", "profiles.json"))
+	if err != nil || !strings.Contains(string(manifest), `"remote_profile_id": "remote-new"`) || strings.Contains(string(manifest), "current-colab-token") {
+		t.Fatalf("restored manifest=%s error=%v", manifest, err)
+	}
+}
+
+func TestListVoiceProfilesImportsConsentedReferenceFromOlderWorker(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer current-colab-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch request.URL.Path {
+		case "/v1/voices":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`[{"id":"legacy-voice","name":"Legacy narrator","language":"vi","status":"ready"}]`))
+		case "/v1/profiles/legacy-voice/reference":
+			writer.Header().Set("Content-Disposition", `attachment; filename="legacy.flac"`)
+			_, _ = writer.Write([]byte("legacy-consented-reference"))
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.projectDataRoot = t.TempDir()
+	app.httpClient = server.Client()
+	profiles, err := app.ListVoiceProfiles(VoiceHealthRequest{BaseURL: server.URL, Token: "current-colab-token"})
+	if err != nil {
+		t.Fatalf("ListVoiceProfiles() error = %v", err)
+	}
+	if len(profiles) != 1 || profiles[0].ID != "legacy-voice" || !profiles[0].Saved || !profiles[0].BackupAvailable {
+		t.Fatalf("profiles = %#v", profiles)
+	}
+	backup, err := os.ReadFile(filepath.Join(app.projectDataRoot, "voice-library", "references", "legacy-voice.flac"))
+	if err != nil || string(backup) != "legacy-consented-reference" {
+		t.Fatalf("backup = %q, error = %v", backup, err)
+	}
+}
+
+func TestCheckSTTHealthAcceptsOnlyCUDAReadyRemoteWorker(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/health" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer stt-session-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		_, _ = writer.Write([]byte(`{"ready":true,"device":"cuda"}`))
+	}))
+	defer server.Close()
+
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	app := NewApp()
+	app.httpClient = &http.Client{Transport: transport}
+	remoteURL := strings.Replace(server.URL, "127.0.0.1", "example.com", 1)
+	result := app.CheckSTTHealth(VoiceHealthRequest{BaseURL: remoteURL, Token: "stt-session-token"})
+	if !result.Reachable || result.Status != http.StatusOK {
+		t.Fatalf("CheckSTTHealth() = %+v", result)
+	}
+}
+
 func TestSaveDesktopDraftCreatesImmutableReviewArtifact(t *testing.T) {
 	root := t.TempDir()
 	store, err := project.Open(filepath.Join(root, "kova.db"))
@@ -117,6 +410,38 @@ func TestSaveDesktopDraftCreatesImmutableReviewArtifact(t *testing.T) {
 	}
 }
 
+func TestDeleteDesktopProjectClearsTimelineAndDraftDirectory(t *testing.T) {
+	root := t.TempDir()
+	store, err := project.Open(filepath.Join(root, "kova.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	app := NewApp()
+	app.projectStore = store
+	app.projectDataRoot = root
+	created, err := store.CreateProject(context.Background(), "Delete desktop project", "vi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartStage(context.Background(), created.ID, project.StageSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.SaveDesktopDraft(created.ID, run.ID, "source", "https://youtu.be/example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.DeleteDesktopProject(created.ID); err != nil {
+		t.Fatalf("DeleteDesktopProject() error = %v", err)
+	}
+	if _, err := store.Snapshot(context.Background(), created.ID); !errors.Is(err, project.ErrProjectNotFound) {
+		t.Fatalf("deleted project snapshot error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", created.ID)); !os.IsNotExist(err) {
+		t.Fatalf("deleted project draft directory exists: %v", err)
+	}
+}
+
 func TestTTSOptionsIncludeDropdownGooglePreset(t *testing.T) {
 	options := NewApp().ListTTSOptions()
 	for _, option := range options {
@@ -125,6 +450,32 @@ func TestTTSOptionsIncludeDropdownGooglePreset(t *testing.T) {
 		}
 	}
 	t.Fatalf("ListTTSOptions() = %+v, want Google Gateway preset", options)
+}
+
+func TestConfigureDesktopTTSReplacesOmniVoiceWithGoogleGatewayAndReusesSessionKey(t *testing.T) {
+	original := config.Conf
+	t.Cleanup(func() { config.Conf = original })
+
+	config.Conf.Tts.Provider = "omnivoice"
+	config.Conf.Tts.Gateway.Endpoint = "https://gateway.example/v1/audio/speech"
+	config.Conf.Tts.Gateway.ApiKey = ""
+	config.Conf.Tts.Gateway.ApiKeyEnv = ""
+	config.Conf.Tts.Gateway.SessionAPIKey = ""
+	config.Conf.Llm.SessionApiKey = "gateway-session-key"
+
+	payload, err := NewApp().configureDesktopTTS(DesktopWorkflowStartRequest{TTSOptionID: "gateway-google-vi"})
+	if err != nil {
+		t.Fatalf("configureDesktopTTS() error = %v", err)
+	}
+	if config.Conf.Tts.Provider != "gateway" || config.Conf.Tts.Gateway.Model != "google-tts/vi" {
+		t.Fatalf("gateway selection was not applied: %+v", config.Conf.Tts)
+	}
+	if config.Conf.Tts.Gateway.SessionAPIKey != "gateway-session-key" {
+		t.Fatal("existing KOVA Gateway session key was not made available to TTS")
+	}
+	if string(payload) != `{"tts_voice_code":"auto"}` {
+		t.Fatalf("gateway payload = %s, want clone-free auto voice", payload)
+	}
 }
 
 func TestTranslationModelDropdownContainsOnlyApprovedFreeGatewayModels(t *testing.T) {

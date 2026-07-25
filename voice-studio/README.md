@@ -36,7 +36,17 @@ POST /v1/profiles               JSON metadata contract
 POST /profiles                  consented multipart reference upload
 GET  /v1/voices?status=ready    KOVA dropdown source
 POST /generate                  multipart synthesis for profile:<id>
+GET  /v1/pairing/{one-time-code} one-click desktop pairing
 ```
+
+## One-click Colab pairing
+
+Open KOVA Voice Studio first, then run the shipped Colab notebook. Its final
+cell shows **Kết nối KOVA Voice Studio**. Clicking it passes only the worker
+URL and a one-time opaque code to the desktop through `kova-voice-studio://`.
+The desktop exchanges that code over HTTPS for the bearer token, verifies the
+GPU worker, and keeps the token only in the current app session. Manual URL
+and token inputs remain available as a fallback.
 
 `POST /generate` loads OmniVoice lazily. Health/profile routes never load a
 model or start inference. To run inference on Colab, use

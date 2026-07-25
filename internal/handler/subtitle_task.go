@@ -87,9 +87,9 @@ func (h Handler) GetSubtitleTask(c *gin.Context) {
 	})
 }
 
-// StartWorkflowSource starts only the source-download/script-extraction stage.
-// The caller explicitly selects speech-to-text or Visual OCR; both stop at
-// the same editable source-SRT review gate.
+// StartWorkflowSource starts only the source download stage. Script extraction
+// is intentionally performed by Stage 02 after the downloaded video is
+// reviewed and approved.
 // It deliberately does not use StartSubtitleTask because that legacy endpoint
 // automatically continues into translation, TTS and rendering.
 func (h Handler) StartWorkflowSource(c *gin.Context) {
@@ -118,6 +118,14 @@ func (h Handler) GetWorkflow(c *gin.Context) {
 	workflowResponse(c, data, err)
 }
 
+func (h Handler) DeleteWorkflow(c *gin.Context) {
+	if err := h.currentWorkflowService().DeleteWorkflow(c.Param("taskId")); err != nil {
+		workflowError(c, err)
+		return
+	}
+	response.R(c, response.Response{Error: 0, Msg: "Đã xóa workflow / Workflow deleted", Data: gin.H{}})
+}
+
 func (h Handler) UpdateWorkflowSubtitle(c *gin.Context) {
 	var req dto.UpdateWorkflowSubtitleReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -140,7 +148,19 @@ func (h Handler) StartWorkflowTranslation(c *gin.Context) {
 	// user-started stage. No source/download/TTS work is restarted here.
 	svc := h.currentWorkflowService()
 	svc.RefreshTranslationClients()
-	data, err := svc.StartWorkflowTranslation(c.Param("taskId"))
+	svc.RefreshTranscriptionClient()
+	var req dto.StartVideoSubtitleTaskReq
+	var data *dto.SubtitleWorkflowData
+	var err error
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			workflowError(c, fmt.Errorf("cấu hình tạo script không hợp lệ: %w", err))
+			return
+		}
+		data, err = svc.StartWorkflowTranslationWithSource(c.Param("taskId"), req)
+	} else {
+		data, err = svc.StartWorkflowTranslation(c.Param("taskId"))
+	}
 	workflowResponse(c, data, err)
 }
 
@@ -161,7 +181,12 @@ func (h Handler) StartWorkflowDubbingAudio(c *gin.Context) {
 		workflowError(c, fmt.Errorf("cấu hình lồng tiếng không hợp lệ: %w", err))
 		return
 	}
-	data, err := h.currentWorkflowService().StartWorkflowDubbingAudio(c.Param("taskId"), req)
+	svc := h.currentWorkflowService()
+	// Explicitly refresh at the HTTP boundary as well. The service also has a
+	// defensive refresh, but doing it here makes the selected dropdown apply
+	// before any workflow state is inspected.
+	svc.RefreshTTSClient()
+	data, err := svc.StartWorkflowDubbingAudio(c.Param("taskId"), req)
 	workflowResponse(c, data, err)
 }
 
@@ -193,14 +218,21 @@ func (h Handler) ApproveWorkflowDubbingVideo(c *gin.Context) {
 }
 
 func (h Handler) StartWorkflowRender(c *gin.Context) {
-	data, err := h.currentWorkflowService().StartWorkflowRender(c.Param("taskId"))
+	var req dto.StartWorkflowRenderReq
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			workflowError(c, fmt.Errorf("invalid render configuration: %w", err))
+			return
+		}
+	}
+	data, err := h.currentWorkflowService().StartWorkflowRenderWithOptions(c.Param("taskId"), req)
 	workflowResponse(c, data, err)
 }
 
 func (h Handler) currentWorkflowService() *service.Service {
 	if configUpdated || h.Service == nil {
 		// Unlike the legacy endpoint this intentionally does not run the full
-		// dependency check. A source speech-to-text review is cloud-backed and
+		// dependency check. Script generation is cloud-backed and
 		// must not be blocked by a local ASR model.
 		h.Service = service.NewService()
 		configUpdated = false
@@ -307,5 +339,10 @@ func (h Handler) DownloadFile(c *gin.Context) {
 		})
 		return
 	}
-	c.FileAttachment(localFilePath, filepath.Base(localFilePath))
+	// Workflow artifacts are opened by the desktop preview as <video>/<audio>
+	// sources. FileAttachment emits Content-Disposition: attachment, which
+	// asks Chromium to download the MP4 instead of rendering it inline. Serve
+	// the same restricted task file normally so MIME/range handling remains
+	// available to the preview player.
+	c.File(localFilePath)
 }

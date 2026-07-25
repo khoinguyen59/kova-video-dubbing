@@ -3,6 +3,7 @@ package deps
 import (
 	"fmt"
 	"kova/config"
+	"kova/internal/processutil"
 	"kova/internal/storage"
 	"kova/log"
 	"kova/pkg/util"
@@ -37,6 +38,85 @@ func CheckDependency() error {
 // video/audio download completes.
 func CheckPlatformSubtitleDependency() error {
 	return checkDependency(false)
+}
+
+// EnsureDubbingMediaTools resolves the already-installed media executables
+// required by synthesis and muxing. Unlike CheckPlatformSubtitleDependency it
+// never downloads anything: a dubbing click must either begin with working
+// ffmpeg/ffprobe paths or fail immediately with a concrete installation
+// message. This prevents a partly synthesized job from reaching ffprobe with
+// an empty command path ("exec: no command").
+func EnsureDubbingMediaTools() error {
+	ffmpeg, err := resolveExistingMediaTool("ffmpeg")
+	if err != nil {
+		return err
+	}
+	ffprobe, err := resolveExistingMediaTool("ffprobe")
+	if err != nil {
+		return err
+	}
+	storage.FfmpegPath = ffmpeg
+	storage.FfprobePath = ffprobe
+	return nil
+}
+
+func resolveExistingMediaTool(tool string) (string, error) {
+	if path, err := exec.LookPath(tool); err == nil {
+		if err := verifyMediaTool(path); err == nil {
+			return path, nil
+		}
+	}
+
+	name := tool
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	seen := make(map[string]struct{})
+	candidates := []string{filepath.Join("bin", name)}
+	if workingDir, workingErr := os.Getwd(); workingErr == nil {
+		for depth := 0; depth < 4; depth++ {
+			candidates = append(candidates, filepath.Join(workingDir, "bin", name))
+			parent := filepath.Dir(workingDir)
+			if parent == workingDir {
+				break
+			}
+			workingDir = parent
+		}
+	}
+	if executable, err := os.Executable(); err == nil {
+		executableDir := filepath.Dir(executable)
+		candidates = append(candidates,
+			filepath.Join(executableDir, "bin", name),
+			filepath.Join(executableDir, name),
+		)
+	}
+	for _, candidate := range candidates {
+		candidate, err := filepath.Abs(filepath.Clean(candidate))
+		if err != nil {
+			continue
+		}
+		if _, duplicate := seen[candidate]; duplicate {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if err := verifyMediaTool(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("không tìm thấy %s đang chạy được; cài %s hoặc giữ %s trong thư mục bin cạnh KOVA rồi thử lại", tool, tool, name)
+}
+
+func verifyMediaTool(path string) error {
+	command := exec.Command(path, "-version")
+	processutil.HideConsole(command)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s cannot run: %w: %s", path, err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // CheckLocalTranscriptionDependency prepares only the selected local STT

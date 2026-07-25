@@ -28,6 +28,51 @@ func TestBuildEmbedSubtitleArgsUsesRequestedSubtitleAndOutput(t *testing.T) {
 	}
 }
 
+func TestBuildEmbedSubtitleArgsCanBlurOldCaptionBandBeforeASS(t *testing.T) {
+	req := RenderVideoRequest{
+		Workdir:      "tasks/demo",
+		InputVideo:   "tasks/demo/origin_video.mp4",
+		SubtitleFile: "tasks/demo/target_language_srt.srt",
+		OutputFile:   "tasks/demo/output/final.mp4",
+		Horizontal:   true,
+		StepParam: &types.SubtitleTaskStepParam{
+			BlurOriginalText: true,
+			BlurRegionX:      0.10,
+			BlurRegionY:      0.70,
+			BlurRegionWidth:  0.80,
+			BlurRegionHeight: 0.20,
+			BlurStrength:     maxRenderBlurStrength,
+		},
+	}
+	args, _ := buildEmbedSubtitleArgs(req)
+	joined := strings.Join(args, " ")
+	for _, expected := range []string{"-filter_complex", "boxblur=luma_radius=11", "[kova_subtitles]", "-map 0:a?", "ass="} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("blurred render args missing %q: %s", expected, joined)
+		}
+	}
+	filterIndex, codecIndex := -1, -1
+	for index, arg := range args {
+		if arg == "-filter_complex" {
+			filterIndex = index
+		}
+		if arg == "-c:v" {
+			codecIndex = index
+		}
+	}
+	if filterIndex < 0 || codecIndex < 0 || filterIndex > codecIndex {
+		t.Fatalf("filter must be specified before codec/output options, args=%q", args)
+	}
+}
+
+func TestFFmpegErrorTailDropsVerboseBanner(t *testing.T) {
+	output := []byte("version banner\nconfiguration banner\ninput details\n[Parsed_ass] bad path\nError opening output files: Invalid argument\n")
+	got := ffmpegErrorTail(output, 2)
+	if strings.Contains(got, "version banner") || !strings.Contains(got, "bad path") || !strings.Contains(got, "Invalid argument") {
+		t.Fatalf("ffmpegErrorTail() = %q", got)
+	}
+}
+
 func TestRenderAssPathDerivesFromOutputFile(t *testing.T) {
 	req := RenderVideoRequest{
 		Workdir:    "tasks/demo",

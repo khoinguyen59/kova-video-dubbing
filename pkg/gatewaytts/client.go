@@ -28,6 +28,12 @@ const (
 	defaultResponseFormat = ""
 	maxAudioBytes         = 256 << 20
 	maxResponseBytes      = 1 << 20
+	transientTTSAttempts  = 2
+	transientTTSRetryWait = 350 * time.Millisecond
+	// A TTS gateway should answer a short synthesis request promptly. Keeping
+	// this bounded prevents a multi-chunk subtitle job from appearing frozen
+	// for many minutes when a remote Edge/Google route is unavailable.
+	requestTimeout = 15 * time.Second
 )
 
 type Client struct {
@@ -50,6 +56,19 @@ type jsonAudioResponse struct {
 	Audio  string `json:"audio"`
 }
 
+type gatewayHTTPError struct {
+	status int
+	detail string
+}
+
+func (e gatewayHTTPError) Error() string {
+	return fmt.Sprintf("API gateway TTS returned HTTP %d: %s", e.status, e.detail)
+}
+
+func (e gatewayHTTPError) retryable() bool {
+	return e.status == http.StatusTooManyRequests || e.status >= http.StatusInternalServerError
+}
+
 // NewClient accepts either the full /v1/audio/speech URL shown by 9Router or
 // the gateway base URL. The latter is expanded to the documented TTS route.
 func NewClient(endpoint, apiKey, model, responseFormat string) *Client {
@@ -64,9 +83,14 @@ func NewClient(endpoint, apiKey, model, responseFormat string) *Client {
 		apiKey:         strings.TrimSpace(apiKey),
 		model:          strings.TrimSpace(model),
 		responseFormat: strings.TrimSpace(responseFormat),
-		httpClient:     &http.Client{Timeout: 90 * time.Second},
+		httpClient:     &http.Client{Timeout: requestTimeout},
 	}
 }
+
+// TTSMaxAttempts tells the timeline runner that a gateway call must fail fast.
+// Retrying a rejected/slow remote request repeatedly per subtitle block was
+// the source of long opaque waits in the desktop workflow.
+func (c *Client) TTSMaxAttempts() int { return 1 }
 
 func normalizeEndpoint(value string) string {
 	value = strings.TrimRight(strings.TrimSpace(value), "/")
@@ -118,28 +142,19 @@ func (c *Client) Text2Speech(text, voice, outputFile string) error {
 		return fmt.Errorf("encode API gateway TTS request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.httpClient.Timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create API gateway TTS request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "audio/wav, audio/mpeg, application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	response, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("call API gateway TTS: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
-		return fmt.Errorf("API gateway TTS returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
-	}
-	audio, err := readAudio(response)
-	if err != nil {
-		return err
+	var audio []byte
+	for attempt := 1; attempt <= transientTTSAttempts; attempt++ {
+		audio, err = c.requestAudio(body)
+		if err == nil {
+			break
+		}
+		if !isRetryableGatewayFailure(err) || attempt == transientTTSAttempts {
+			if attempt > 1 {
+				return fmt.Errorf("API Gateway TTS vẫn lỗi sau %d lần thử nhanh: %w", attempt, err)
+			}
+			return err
+		}
+		time.Sleep(time.Duration(attempt) * transientTTSRetryWait)
 	}
 	if len(audio) == 0 {
 		return errors.New("API gateway TTS returned empty audio")
@@ -151,6 +166,33 @@ func (c *Client) Text2Speech(text, voice, outputFile string) error {
 		return fmt.Errorf("write API gateway TTS output: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) requestAudio(body []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.httpClient.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create API gateway TTS request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "audio/wav, audio/mpeg, application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	response, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call API gateway TTS: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+		return nil, gatewayHTTPError{status: response.StatusCode, detail: strings.TrimSpace(string(detail))}
+	}
+	return readAudio(response)
+}
+
+func isRetryableGatewayFailure(err error) bool {
+	var responseErr gatewayHTTPError
+	return errors.As(err, &responseErr) && responseErr.retryable()
 }
 
 func readAudio(response *http.Response) ([]byte, error) {

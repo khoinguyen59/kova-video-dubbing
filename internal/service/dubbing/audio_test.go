@@ -48,6 +48,19 @@ func TestBuildMuxArgsMapsVideoAndDubAudio(t *testing.T) {
 	}
 }
 
+func TestBuildBackgroundMixArgsUsesSeparatedBackgroundNotSourceVideoAudio(t *testing.T) {
+	args := buildBackgroundMixArgs("tts.wav", "source_background.wav", "mixed.wav", 0.38)
+	joined := strings.Join(args, " ")
+	for _, expected := range []string{"-i tts.wav", "-i source_background.wav", "amix=inputs=2", "volume=0.380", "-map [kova_mix]", "mixed.wav"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("background-mix args missing %q: %v", expected, args)
+		}
+	}
+	if strings.Contains(joined, "input.mp4") {
+		t.Fatalf("background mix must not reintroduce source-video audio: %v", args)
+	}
+}
+
 func TestBuildSlotFitFilterPinsExactSubtitleDuration(t *testing.T) {
 	got, err := buildSlotFitFilter(1.2, 2.5)
 	if err != nil {

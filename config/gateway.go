@@ -105,6 +105,7 @@ func ConfigureKOVAGatewayTranscription() error {
 		return errors.New("chưa cấu hình API key cho KOVA API Gateway dùng speech-to-text")
 	}
 	Conf.Transcribe.Provider = "openai"
+	Conf.Transcribe.RemoteAudioSeparation = false
 	Conf.Transcribe.Openai.BaseUrl = KOVAGatewayBaseURL
 	Conf.Transcribe.Openai.SessionAPIKey = key
 	if strings.TrimSpace(Conf.Transcribe.Openai.Model) == "" {
